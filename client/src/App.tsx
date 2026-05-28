@@ -1102,6 +1102,50 @@ function InsightsPanel({ items, workLogs, onOpenItem }: { items: Request[]; work
         </div>
       )}
 
+      {/* ── Hours rings: Today + Week ── */}
+      {(() => {
+        const todayKey = new Date().toISOString().split("T")[0];
+        const wkStart = new Date(); wkStart.setDate(wkStart.getDate() - 6); const wkKey = wkStart.toISOString().split("T")[0];
+        const todayMins = workLogs.filter(l => l.log_date === todayKey).reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+        const weekMins  = workLogs.filter(l => l.log_date >= wkKey).reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+        const todayHrs  = Math.round((todayMins / 60) * 10) / 10;
+        const weekHrs   = Math.round((weekMins  / 60) * 10) / 10;
+        const CAP_DAY   = 7.5;
+        const CAP_WEEK  = 37.5;
+        const todayPct  = Math.min(todayHrs / CAP_DAY, 1);
+        const weekPct   = Math.min(weekHrs  / CAP_WEEK, 1);
+        const todayColor = todayPct >= 1 ? SENSE_RED : todayPct >= 0.7 ? "hsl(38 90% 55%)" : SENSE_BLUE;
+        const weekColor  = weekPct  >= 1 ? SENSE_RED : weekPct  >= 0.7 ? "hsl(38 90% 55%)" : SENSE_BLUE;
+        const Ring = ({ pct, hrs, cap, color, label }: { pct: number; hrs: number; cap: number; color: string; label: string }) => {
+          const r = 26; const circ = 2 * Math.PI * r;
+          return (
+            <div className="flex flex-col items-center gap-1">
+              <svg width={68} height={68} viewBox="0 0 68 68">
+                <circle cx={34} cy={34} r={r} fill="none" stroke="hsl(222 15% 18%)" strokeWidth={7} />
+                <circle cx={34} cy={34} r={r} fill="none" stroke={color} strokeWidth={7}
+                  strokeDasharray={`${pct * circ} ${circ}`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 34 34)"
+                  style={{ transition: "stroke-dasharray 0.6s ease" }}
+                />
+                <text x={34} y={31} textAnchor="middle" dominantBaseline="middle" fill={color} fontSize={11} fontWeight={700}>{hrs}</text>
+                <text x={34} y={43} textAnchor="middle" dominantBaseline="middle" fill="hsl(215 15% 50%)" fontSize={8}>/ {cap}h</text>
+              </svg>
+              <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+            </div>
+          );
+        };
+        return (
+          <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-3">Hours Logged</span>
+            <div className="flex justify-around">
+              <Ring pct={todayPct} hrs={todayHrs} cap={CAP_DAY}  color={todayColor} label="Today" />
+              <Ring pct={weekPct}  hrs={weekHrs}  cap={CAP_WEEK} color={weekColor}  label="This Week" />
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── 14-day sparkline ── */}
       <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
         <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Activity · 14 days</span>

@@ -26,6 +26,7 @@ type Request = {
   status: string;
   notes: string | null;
   description: string | null;
+  entry_date: string | null;   // user-editable "when did this happen" date
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -43,10 +44,16 @@ function rowToRequest(row: any): Request {
     status: row.status,
     notes: row.notes ?? null,
     description: row.description ?? null,
+    entry_date: row.entry_date ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at ?? null,
   };
+}
+
+// Effective date: entry_date if set, otherwise fall back to created_at date
+function effectiveDate(item: Request): string {
+  return item.entry_date ?? item.created_at.split("T")[0];
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -279,6 +286,7 @@ function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_
     type,
     priority,
     deadline: deadline || null,
+    entry_date: null, // will be set to today on insert
     status: "inbox",
     notes,
     description: text.trim(),
@@ -295,72 +303,95 @@ function fuzzyMatch(target: string, keyword: string): boolean {
 
 function generateInsights(items: Request[]): string[] {
   const insights: string[] = [];
-  const active   = items.filter(i => i.status !== "done");
-  const overdue  = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
-  const urgent   = active.filter(i => i.priority === "Urgent");
-  const today    = new Date(); today.setHours(0, 0, 0, 0);
+  const active      = items.filter(i => i.status !== "done");
+  const overdue     = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
+  const urgent      = active.filter(i => i.priority === "Urgent");
+  const today       = new Date(); today.setHours(0, 0, 0, 0);
+  const todayKey    = today.toISOString().split("T")[0];
+  const thisWeekMs  = 7 * 86400000;
 
-  // Overdue alert
+  // ── Critical alerts first ──
   if (overdue.length > 0) {
     const names = overdue.slice(0, 2).map(i => i.project_name || i.title).join(", ");
-    insights.push(`⚠ ${overdue.length} item${overdue.length > 1 ? "s are" : " is"} overdue — ${names}${overdue.length > 2 ? " & more" : ""}.`);
+    insights.push(`⚠ ${overdue.length} overdue — ${names}${overdue.length > 2 ? " +more" : ""}.`);
   }
-
-  // Urgent items
   if (urgent.length > 0) {
-    insights.push(`🔴 ${urgent.length} urgent item${urgent.length > 1 ? "s" : ""} need${urgent.length === 1 ? "s" : ""} immediate attention.`);
+    const urgentNames = urgent.slice(0, 2).map(i => i.project_name || i.title).join(", ");
+    insights.push(`🔴 Urgent: ${urgentNames}${urgent.length > 2 ? ` (+${urgent.length - 2} more)` : ""}.`);
   }
 
-  // Inbox pile-up
-  const inbox = active.filter(i => i.status === "inbox");
-  if (inbox.length >= 5) {
-    insights.push(`📥 ${inbox.length} items sitting in Inbox — consider triaging or starting the oldest ones.`);
-  }
+  // ── Deadlines within 48 hrs ──
+  const dueToday = active.filter(i => { const dl = deadlineInfo(i.deadline); return dl && dl.diff !== undefined && dl.diff === 0; });
+  const dueTomorrow = active.filter(i => { const dl = deadlineInfo(i.deadline); return dl && dl.diff !== undefined && dl.diff === 1; });
+  if (dueToday.length > 0) insights.push(`📅 Due today: ${dueToday.map(i => i.project_name || i.title).join(", ")}.`);
+  else if (dueTomorrow.length > 0) insights.push(`📅 Due tomorrow: ${dueTomorrow.map(i => i.project_name || i.title).join(", ")}.`);
 
-  // Stalled in-progress
-  const inProgress = items.filter(i => i.status === "in-progress");
-  const stalled = inProgress.filter(i => {
-    const updatedAt = new Date(i.updated_at);
-    return (today.getTime() - updatedAt.getTime()) > 3 * 86400000;
-  });
+  // ── Stalled in-progress ──
+  const stalled = items.filter(i => i.status === "in-progress" &&
+    (today.getTime() - new Date(i.updated_at).getTime()) > 3 * 86400000);
   if (stalled.length > 0) {
-    insights.push(`⏸ ${stalled.length} item${stalled.length > 1 ? "s" : ""} in progress haven't moved in 3+ days.`);
+    insights.push(`⏸ ${stalled.length} task${stalled.length > 1 ? "s" : ""} stalled (no update in 3+ days) — ${stalled.slice(0,1).map(i => i.project_name || i.title).join(", ")}.`);
   }
 
-  // Upcoming deadlines
-  const dueSoon = active.filter(i => {
-    const dl = deadlineInfo(i.deadline);
-    return dl && dl.diff !== undefined && dl.diff >= 0 && dl.diff <= 3;
-  });
-  if (dueSoon.length > 0) {
-    insights.push(`📅 ${dueSoon.length} item${dueSoon.length > 1 ? "s" : ""} due within 3 days — check deadlines.`);
+  // ── Today's activity ──
+  const addedToday = items.filter(x => effectiveDate(x) === todayKey);
+  const completedToday = items.filter(x => x.completed_at?.startsWith(todayKey));
+  if (addedToday.length > 0 || completedToday.length > 0) {
+    const parts: string[] = [];
+    if (addedToday.length > 0)     parts.push(`${addedToday.length} logged`);
+    if (completedToday.length > 0) parts.push(`${completedToday.length} completed`);
+    insights.push(`📋 Today: ${parts.join(", ")}.`);
   }
 
-  // Busiest project
+  // ── Inbox pile-up ──
+  const inbox = active.filter(i => i.status === "inbox");
+  if (inbox.length >= 4) {
+    const oldest = [...inbox].sort((a, b) => effectiveDate(a).localeCompare(effectiveDate(b)))[0];
+    const oldestAge = Math.round((today.getTime() - new Date(effectiveDate(oldest) + "T00:00:00").getTime()) / 86400000);
+    insights.push(`📥 ${inbox.length} in Inbox — oldest is ${oldestAge}d old. Worth a triage.`);
+  }
+
+  // ── Busiest project ──
   const byProject: Record<string, number> = {};
-  items.forEach(i => {
-    const key = i.project_name || "(no project)";
-    byProject[key] = (byProject[key] || 0) + 1;
-  });
+  active.forEach(i => { if (i.project_name) byProject[i.project_name] = (byProject[i.project_name] || 0) + 1; });
   const topProject = Object.entries(byProject).sort((a, b) => b[1] - a[1])[0];
-  if (topProject && topProject[0] !== "(no project)" && topProject[1] >= 2) {
-    insights.push(`📁 "${topProject[0]}" has the most activity with ${topProject[1]} items.`);
+  if (topProject && topProject[1] >= 2) {
+    insights.push(`📁 "${topProject[0]}" has ${topProject[1]} open items — most active project.`);
   }
 
-  // Completion rate
-  const done = items.filter(i => i.status === "done");
-  const rate = items.length > 0 ? Math.round((done.length / items.length) * 100) : 0;
-  if (items.length >= 3) {
-    const tone = rate >= 70 ? "Great momentum" : rate >= 40 ? "Steady progress" : "Room to clear backlog";
-    insights.push(`✅ ${rate}% completion rate across ${items.length} total items. ${tone}.`);
+  // ── Requester with most open items ──
+  const byPerson: Record<string, number> = {};
+  active.forEach(i => { if (i.person) byPerson[i.person] = (byPerson[i.person] || 0) + 1; });
+  const topPerson = Object.entries(byPerson).sort((a, b) => b[1] - a[1])[0];
+  if (topPerson && topPerson[1] >= 2) {
+    insights.push(`👤 ${topPerson[0]} has ${topPerson[1]} open requests.`);
   }
 
-  // No urgent, no overdue = positive signal
-  if (overdue.length === 0 && urgent.length === 0 && active.length > 0) {
-    insights.push("✨ No overdue items and nothing urgent. Well managed.");
+  // ── Weekly velocity ──
+  const doneThisWk = items.filter(x => x.completed_at && (today.getTime() - new Date(x.completed_at).getTime()) < thisWeekMs).length;
+  const doneLastWk = items.filter(x => {
+    if (!x.completed_at) return false;
+    const ms = today.getTime() - new Date(x.completed_at).getTime();
+    return ms >= thisWeekMs && ms < 2 * thisWeekMs;
+  }).length;
+  const velocity = doneThisWk - doneLastWk;
+  if (doneThisWk > 0) {
+    const trend = velocity > 0 ? `↑ up ${velocity} from last wk` : velocity < 0 ? `↓ down ${Math.abs(velocity)} from last wk` : "same pace as last wk";
+    insights.push(`✅ ${doneThisWk} completed this week — ${trend}.`);
   }
 
-  return insights.slice(0, 4); // show max 4
+  // ── Proposal pipeline ──
+  const proposals = active.filter(i => i.type === "Proposal");
+  if (proposals.length >= 2) {
+    insights.push(`📄 ${proposals.length} proposals in flight — review for follow-up needed.`);
+  }
+
+  // ── All-clear ──
+  if (overdue.length === 0 && urgent.length === 0 && stalled.length === 0 && active.length > 0) {
+    insights.push("✨ No overdue, nothing urgent, nothing stalled. Clean slate.");
+  }
+
+  return insights.slice(0, 5); // show max 5
 }
 
 // ─── Components ──────────────────────────────────────────────────────────────
@@ -564,10 +595,23 @@ function RequestCard({ item, onMove, onDelete, onClick }: {
             </div>
           )}
           {dl && (
-            <div className={`flex items-center gap-1 text-[10px] font-medium ml-auto ${dl.cls}`}>
+            <div className={`flex items-center gap-1 text-[10px] font-medium ${!item.person ? "ml-auto" : ""} ${dl.cls}`}>
               <Clock size={9} /><span>{dl.text}</span>
             </div>
           )}
+          {/* Entry date badge — only when backdated (not today) */}
+          {(() => {
+            const edate = effectiveDate(item);
+            const todayKey = new Date().toISOString().split("T")[0];
+            if (edate === todayKey) return null;
+            const d = new Date(edate + "T00:00:00");
+            const fmt = d.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+            return (
+              <div className="flex items-center gap-1 text-[9.5px] text-muted-foreground/50 ml-auto">
+                <CalendarDays size={8.5} /><span>{fmt}</span>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </motion.div>
@@ -631,7 +675,7 @@ function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (i
     const key = d.toISOString().split("T")[0];
     return {
       label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }),
-      added: items.filter(x => x.created_at?.startsWith(key)).length,
+      added: items.filter(x => effectiveDate(x) === key).length,
       done:  items.filter(x => x.completed_at?.startsWith(key)).length,
     };
   }), [items]);
@@ -866,9 +910,9 @@ function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (it
     const isToday = i === 6;
     return {
       key, d, isToday,
-      added:     items.filter(x => x.created_at?.startsWith(key)),
+      added:     items.filter(x => effectiveDate(x) === key),
       completed: items.filter(x => x.completed_at?.startsWith(key)),
-      updated:   items.filter(x => x.updated_at?.startsWith(key) && !x.created_at?.startsWith(key) && !x.completed_at?.startsWith(key)),
+      updated:   items.filter(x => x.updated_at?.startsWith(key) && effectiveDate(x) !== key && !x.completed_at?.startsWith(key)),
       label: isToday ? "Today" : d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }),
     };
   }), [items]);
@@ -906,34 +950,68 @@ function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (it
       <div className="flex-1 overflow-y-auto styled-scroll px-5 py-3 flex flex-col gap-2.5">
         {[...days].reverse().map(day => {
           const total = day.added.length + day.completed.length + day.updated.length;
+          // PA-style day narrative
+          const dayNarrative = (() => {
+            if (total === 0) return null;
+            const parts: string[] = [];
+            const projects = new Set([...day.added, ...day.completed].map(i => i.project_name).filter(Boolean));
+            if (day.added.length > 0) parts.push(`${day.added.length} logged`);
+            if (day.completed.length > 0) parts.push(`${day.completed.length} closed out`);
+            if (projects.size > 0) parts.push(`across ${[...projects].slice(0, 2).join(", ")}${projects.size > 2 ? " +more" : ""}`);
+            const types = [...new Set([...day.added, ...day.completed].map(i => i.type))];
+            if (types.length === 1) parts.push(`(${types[0].toLowerCase()}s only)`);
+            return parts.join(" — ");
+          })();
           return (
             <div key={day.key} className={`rounded-xl border ${day.isToday ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-white/[0.06] bg-[hsl(222_18%_10%)]"}`}>
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-white/[0.05]">
-                <span className={`text-[11px] font-bold ${day.isToday ? "text-blue-300" : "text-foreground"}`}>{day.label}</span>
-                {total === 0 && <span className="text-[10px] text-muted-foreground/40 ml-1">— quiet</span>}
-                {total > 0 && (
-                  <div className="ml-auto flex items-center gap-2">
-                    {day.added.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-blue-400 font-semibold">+{day.added.length}</span> added</span>}
-                    {day.completed.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-green-400 font-semibold">✓{day.completed.length}</span> done</span>}
-                  </div>
+              <div className="px-4 py-2.5 border-b border-white/[0.05]">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[11.5px] font-bold ${day.isToday ? "text-blue-300" : "text-foreground"}`}>{day.label}</span>
+                  {total === 0 && <span className="text-[10px] text-muted-foreground/40 ml-1">— quiet day</span>}
+                  {total > 0 && (
+                    <div className="ml-auto flex items-center gap-2">
+                      {day.added.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-blue-400 font-semibold">+{day.added.length}</span> logged</span>}
+                      {day.completed.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-green-400 font-semibold">✓{day.completed.length}</span> done</span>}
+                      {day.updated.length > 0 && <span className="text-[10px] text-muted-foreground/50">{day.updated.length} updated</span>}
+                    </div>
+                  )}
+                </div>
+                {dayNarrative && (
+                  <p className="text-[10px] text-muted-foreground/60 mt-0.5 leading-relaxed">{dayNarrative}</p>
                 )}
               </div>
               {total > 0 && (
                 <div className="px-4 py-2 flex flex-col gap-1">
                   {day.completed.map(item => (
                     <button key={`d-${item.id}`} onClick={() => onOpenItem(item)}
-                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1 py-0.5 transition-colors w-full">
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1.5 py-1 transition-colors w-full group">
                       <CheckCircle2 size={10} className="text-green-400 shrink-0" />
-                      <span className="text-[11px] text-foreground flex-1 truncate line-through opacity-50">{item.project_name || item.title}</span>
+                      <div className="flex-1 min-w-0">
+                        {item.project_name && <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground/50 truncate">{item.project_name}</div>}
+                        <div className="text-[11px] text-foreground/60 truncate line-through">{item.title}</div>
+                      </div>
                       <TypeBadge type={item.type} />
                     </button>
                   ))}
                   {day.added.map(item => (
                     <button key={`a-${item.id}`} onClick={() => onOpenItem(item)}
-                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1 py-0.5 transition-colors w-full">
-                      <div className="w-1.5 h-1.5 rounded-full border border-blue-400/60 shrink-0" />
-                      <span className="text-[11px] text-foreground flex-1 truncate">{item.project_name || item.title}</span>
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1.5 py-1 transition-colors w-full group">
+                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        item.priority === "Urgent" ? "bg-red-500" : item.priority === "High" ? "bg-amber-400" : "border border-blue-400/60"
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        {item.project_name && <div className="text-[9px] font-bold uppercase tracking-wider text-blue-400/70 truncate">{item.project_name}</div>}
+                        <div className="text-[11px] text-foreground truncate">{item.title}</div>
+                      </div>
                       {item.person && <span className="text-[10px] text-muted-foreground shrink-0">{item.person}</span>}
+                      <TypeBadge type={item.type} />
+                    </button>
+                  ))}
+                  {day.updated.map(item => (
+                    <button key={`u-${item.id}`} onClick={() => onOpenItem(item)}
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1.5 py-1 transition-colors w-full opacity-50">
+                      <RefreshCw size={9} className="text-muted-foreground shrink-0" />
+                      <span className="text-[10.5px] text-muted-foreground flex-1 truncate">{item.project_name || item.title}</span>
                       <TypeBadge type={item.type} />
                     </button>
                   ))}
@@ -961,6 +1039,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
   const [type,        setType]        = useState(item.type);
   const [priority,    setPriority]    = useState(item.priority);
   const [deadline,    setDeadline]    = useState(item.deadline || "");
+  const [entryDate,   setEntryDate]   = useState(effectiveDate(item));
   const [notes,       setNotes]       = useState(item.notes || "");
   const [status,      setStatus]      = useState(item.status);
 
@@ -1031,6 +1110,17 @@ function EditModal({ item, onClose, onSave, onDelete }: {
               <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}
                 className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[12.5px] text-foreground outline-none focus:border-blue-500/50" />
             </div>
+
+            <div className="col-span-2">
+              <label className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                <CalendarDays size={11} className="text-blue-400" />
+                Entry Date
+                <span className="ml-auto font-normal normal-case text-[9px] text-muted-foreground/60">When did this happen?</span>
+              </label>
+              <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
+                className="w-full rounded-lg border border-blue-500/20 bg-blue-500/[0.04] px-3 py-2 text-[12.5px] text-foreground outline-none focus:border-blue-500/50" />
+              <p className="text-[9.5px] text-muted-foreground/50 mt-1">Backdate to log work done on a previous day — shows up in Weekly Review under that day.</p>
+            </div>
           </div>
 
           <div>
@@ -1061,7 +1151,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
           <div className="flex-1" />
           <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[12.5px] text-muted-foreground hover:text-foreground hover:bg-white/[0.06] transition-colors">Cancel</button>
           <button onClick={() => {
-            onSave(item.id, { project_name: projectName.trim() || null, title: title.trim() || item.title, person: person.trim() || null, type, priority, deadline: deadline || null, notes, status });
+            onSave(item.id, { project_name: projectName.trim() || null, title: title.trim() || item.title, person: person.trim() || null, type, priority, deadline: deadline || null, entry_date: entryDate || null, notes, status });
             onClose();
           }} className="px-4 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-[12.5px] font-semibold text-white transition-colors flex items-center gap-1.5">
             Save <ArrowRight size={12} />
@@ -1152,10 +1242,12 @@ export default function App() {
 
   const createRequest = useCallback(async (data: Omit<Request, "id"|"created_at"|"updated_at"|"completed_at">) => {
     setLoading(true);
+    const todayIso = new Date().toISOString().split("T")[0];
     const { error } = await supabase.from("requests").insert([{
       project_name: data.project_name, title: data.title, person: data.person,
       type: data.type, priority: data.priority, deadline: data.deadline,
       status: data.status, notes: data.notes || "", description: data.description || "",
+      entry_date: data.entry_date || todayIso,
     }]);
     setLoading(false);
     if (error) { showToast("Failed to add", "error"); return; }

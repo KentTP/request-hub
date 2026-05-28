@@ -112,11 +112,65 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// 24 perceptually distinct colours — large enough that hash collisions are rare
+const PROJECT_PALETTE = [
+  "#3b9fd4", // sense blue
+  "#f59e0b", // amber
+  "#a78bfa", // violet
+  "#38bdf8", // sky
+  "#fb923c", // orange
+  "#34d399", // emerald
+  "#f472b6", // pink
+  "#818cf8", // indigo
+  "#fbbf24", // yellow
+  "#2dd4bf", // teal
+  "#c084fc", // purple
+  "#4ade80", // green
+  "#e879f9", // fuchsia
+  "#60a5fa", // blue-400
+  "#facc15", // yellow-400
+  "#f97316", // orange-500
+  "#22d3ee", // cyan
+  "#a3e635", // lime
+  "#e2e8f0", // slate-200 (light grey)
+  "#d946ef", // fuchsia-500
+  "#0ea5e9", // sky-500
+  "#84cc16", // lime-500
+  "#6366f1", // indigo-500
+  "#fb7185", // rose-400
+];
+
+// RFP/generic category names that always get Sense Red
+const RED_PROJECT_NAMES = new Set(["rfp", "rfi", "rfq", "tender"]);
+
+// Cache: project name → palette index. Seeded deterministically from sorted project list.
+const _projectColorCache = new Map<string, number>();
+
+// Call this whenever the full item list changes — assigns palette indices by
+// sorted project name so the mapping is stable across reloads.
+function seedProjectColors(projectNames: string[]): void {
+  const sorted = [...new Set(
+    projectNames
+      .map(n => n.toLowerCase().trim())
+      .filter(n => n && !RED_PROJECT_NAMES.has(n))
+  )].sort();
+  sorted.forEach((name, i) => {
+    if (!_projectColorCache.has(name)) {
+      _projectColorCache.set(name, i % PROJECT_PALETTE.length);
+    }
+  });
+}
+
 function avatarColor(name: string): string {
-  const p = ["#3b9fd4","#60a5fa","#f59e0b","#a78bfa","#f87171","#38bdf8","#fb923c"];
+  const key = name.toLowerCase().trim();
+  // Hard-coded overrides
+  if (RED_PROJECT_NAMES.has(key)) return SENSE_RED;
+  // Return cached colour (seeded from full project list on mount/update)
+  if (_projectColorCache.has(key)) return PROJECT_PALETTE[_projectColorCache.get(key)!];
+  // Fallback: hash-based (new project not yet seeded)
   let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
-  return p[h % p.length];
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) & 0xffff;
+  return PROJECT_PALETTE[h % PROJECT_PALETTE.length];
 }
 function initials(name: string): string {
   const p = name.trim().split(/\s+/);
@@ -1554,7 +1608,12 @@ export default function App() {
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase
       .from("requests").select("*").order("created_at", { ascending: false });
-    if (!error && data) setItems(data.map(rowToRequest));
+    if (!error && data) {
+      const mapped = data.map(rowToRequest);
+      // Seed project colours deterministically before first render
+      seedProjectColors(mapped.map(i => i.project_name).filter(Boolean) as string[]);
+      setItems(mapped);
+    }
   }, []);
 
   const fetchWorkLogs = useCallback(async () => {

@@ -1176,46 +1176,6 @@ function InsightsPanel({ items, workLogs, onOpenItem }: { items: Request[]; work
         </div>
       </div>
 
-      {/* ── BD / Proposal / Project+Task breakdown ── */}
-      {(() => {
-        const buckets = [
-          { label: "BD",       color: TYPE_COLORS.BD,       total: items.filter(i => i.type === "BD").length,       active: items.filter(i => i.type === "BD" && i.status !== "done").length },
-          { label: "Proposal", color: TYPE_COLORS.Proposal,  total: items.filter(i => i.type === "Proposal").length,  active: items.filter(i => i.type === "Proposal" && i.status !== "done").length },
-          { label: "Review",   color: TYPE_COLORS.Review,    total: items.filter(i => i.type === "Review").length,    active: items.filter(i => i.type === "Review" && i.status !== "done").length },
-          { label: "Project",  color: TYPE_COLORS.Project,   total: items.filter(i => i.type === "Project").length,   active: items.filter(i => i.type === "Project" && i.status !== "done").length },
-          { label: "Task",     color: TYPE_COLORS.Task,      total: items.filter(i => i.type === "Task").length,      active: items.filter(i => i.type === "Task" && i.status !== "done").length },
-        ].filter(b => b.total > 0);
-        const maxTotal = Math.max(...buckets.map(b => b.total), 1);
-        if (buckets.length === 0) return null;
-        return (
-          <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Workload Mix</span>
-              <span className="text-[9px] text-muted-foreground/50">{items.length} total</span>
-            </div>
-            <div className="flex flex-col gap-2">
-              {buckets.map(b => (
-                <div key={b.label}>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: b.color }} />
-                      <span className="text-[10.5px] text-foreground font-medium">{b.label}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {b.active > 0 && <span className="text-[9px] font-semibold" style={{ color: b.color }}>{b.active} active</span>}
-                      <span className="text-[9px] font-bold tabular text-muted-foreground">{b.total}</span>
-                    </div>
-                  </div>
-                  <div className="h-[4px] rounded-full bg-white/[0.05] overflow-hidden">
-                    <div className="h-full rounded-full transition-all duration-500"
-                      style={{ width: `${(b.total / maxTotal) * 100}%`, background: b.color + "cc" }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
 
 
       {/* ── Top requesters ── */}

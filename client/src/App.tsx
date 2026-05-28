@@ -1859,7 +1859,11 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
   const [editLogDate, setEditLogDate]         = useState("");
   const [editLogDuration, setEditLogDuration] = useState("");
 
-  const projItems = items.filter(i => i.project_name?.toLowerCase() === projectName.toLowerCase());
+  // For Proposal/BD the modal is opened with the title as key — match both project_name and title
+  const projItems = items.filter(i =>
+    i.project_name?.toLowerCase() === projectName.toLowerCase() ||
+    i.title?.toLowerCase() === projectName.toLowerCase()
+  );
   const projLogs  = workLogs.filter(l => l.project_name.toLowerCase() === projectName.toLowerCase())
     .sort((a, b) => b.log_date.localeCompare(a.log_date));
 
@@ -2314,6 +2318,17 @@ export default function App() {
     { status: "done",        label: "Done",         icon: <CheckCircle2 size={12} />, accentColor: SLATE_DIM },
   ];
 
+  // Smart open: Proposal/BD use title as the unique project key
+  const openItem = useCallback((item: Request) => {
+    if ((item.type === "Proposal" || item.type === "BD") && item.title) {
+      setProjectModal(item.title);
+    } else if (item.project_name) {
+      setProjectModal(item.project_name);
+    } else {
+      setEditingItem(item);
+    }
+  }, []);
+
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
 
@@ -2394,15 +2409,7 @@ export default function App() {
                     workLogs={workLogs}
                     onMove={handleMove}
                     onDelete={handleDelete}
-                    onOpenItem={item => {
-                      if ((item.type === "Proposal" || item.type === "BD") && item.title) {
-                        setProjectModal(item.title);
-                      } else if (item.project_name) {
-                        setProjectModal(item.project_name);
-                      } else {
-                        setEditingItem(item);
-                      }
-                    }}
+                    onOpenItem={openItem}
                     onOpenProject={name => setProjectModal(name)}
                   />
                 </div>
@@ -2413,7 +2420,7 @@ export default function App() {
                       <Column key={col.status} {...col}
                         items={filtered.filter(i => i.status === col.status)}
                         onMove={handleMove} onDelete={handleDelete}
-                        onClick={item => item.project_name ? setProjectModal(item.project_name) : setEditingItem(item)} />
+                        onClick={openItem} />
                     ))}
                   </div>
                 </div>
@@ -2493,7 +2500,7 @@ export default function App() {
             items={items}
             workLogs={workLogs}
             onClose={() => setProjectModal(null)}
-            onOpenItem={item => { setProjectModal(null); setEditingItem(item); }}
+            onOpenItem={item => { setProjectModal(null); openItem(item); }}
             onAddLog={addWorkLog}
             onDeleteLog={deleteWorkLog}
             onEditLog={updateWorkLog}

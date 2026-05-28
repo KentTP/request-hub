@@ -279,7 +279,18 @@ function cleanTitle(text: string, person: string | null): string {
 }
 
 // 3-line parse: line1=project, line2=task, line3=notes
-function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_at" | "completed_at"> {
+// Generic category words on line 1 — skip dedup when these are used as project names.
+// Each RFP / Tender / EIA is a fresh independent item.
+const GENERIC_PROJECT_TRIGGERS = new Set([
+  "rfp", "rfi", "rfq", "tender", "eia", "eia review", "proposal",
+  "bid", "quote", "review", "task", "misc", "general",
+]);
+
+function isGenericProjectName(name: string): boolean {
+  return GENERIC_PROJECT_TRIGGERS.has(name.toLowerCase().trim());
+}
+
+function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_at" | "completed_at"> & { _skipDedup?: boolean } {
   const lines = text.trim().split("\n").map(l => l.trim()).filter(Boolean);
   const line1 = lines[0] || "";
   const line2 = lines[1] || "";
@@ -288,20 +299,24 @@ function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_
   // Project name = first line verbatim (cleaned of punctuation edges)
   const project_name = line1.replace(/^[,.\-–\s]+|[,.\-–\s]+$/g, "").trim() || null;
 
+  // Detect if line1 is a generic category (RFP, Tender, EIA, etc.)
+  const genericCategory = project_name ? isGenericProjectName(project_name) : false;
+
   // Task context = line2 (or line1 if only one line)
   const taskText = line2 || line1;
   const person   = extractPerson(taskText);
-  const type     = extractType(line2 ? taskText : text);
-  const priority = extractPriority(text); // scan all lines for priority signals
-  const deadline = parseDeadline(text);   // scan all lines for deadline signals
 
-  // Title from task line, cleaned
+  // If line1 is a known type keyword, honour it for type detection; otherwise extract from task text
+  const typeFromLine1 = genericCategory ? extractType(line1) : null;
+  const type     = typeFromLine1 || extractType(line2 ? taskText : text);
+  const priority = extractPriority(text);
+  const deadline = parseDeadline(text);
+
   const rawTitle = cleanTitle(taskText, person);
   const title = rawTitle.length > 2
     ? rawTitle[0].toUpperCase() + rawTitle.slice(1)
     : project_name || "Task request";
 
-  // Notes = line3, or auto-detected notes prefix
   const notes = line3 || "";
 
   return {
@@ -311,10 +326,12 @@ function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_
     type,
     priority,
     deadline: deadline || null,
-    entry_date: null, // will be set to today on insert
+    entry_date: null,
+    assignee: null,
     status: "inbox",
     notes,
     description: text.trim(),
+    _skipDedup: genericCategory,
   };
 }
 
@@ -620,8 +637,8 @@ function RequestCard({ item, onMove, onDelete, onClick }: {
             </div>
           )}
           {item.assignee && (
-            <div className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded-full px-1.5 py-0.5">
-              <Avatar name={item.assignee} size={12} />
+            <div className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded-full px-2 py-0.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-blue-400/70 shrink-0" />
               <span className="text-[9.5px] font-medium text-blue-300/80">{item.assignee}</span>
             </div>
           )}
@@ -1619,6 +1636,12 @@ export default function App() {
     }
 
     const parsed = parseInput(text);
+    // Generic categories (RFP, Tender, EIA, etc.) skip dedup — each is a fresh entry
+    if (parsed._skipDedup) {
+      createRequest(parsed);
+      return;
+    }
+    // For real project names, use project_name as dedup key; fall back to title
     const matchKey = parsed.project_name || parsed.title;
     const match = findSimilarItem(matchKey, items);
     if (match) {

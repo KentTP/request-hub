@@ -1,8 +1,22 @@
-import { useState, useRef, useCallback } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Request } from "@shared/schema";
+
+// Local Request type matching Supabase schema
+type Request = {
+  id: string;
+  title: string;
+  person: string | null;
+  type: string;
+  priority: string;
+  deadline: string | null;
+  status: string;
+  notes: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
 import {
   AreaChart, Area, ResponsiveContainer, Tooltip, XAxis,
 } from "recharts";
@@ -12,6 +26,24 @@ import {
   TrendingUp, TrendingDown, Minus, Calendar,
   User, Tag, ChevronDown, RefreshCw, Target,
 } from "lucide-react";
+
+// Supabase helpers — map DB snake_case ↔ camelCase lightly
+function rowToRequest(row: any): Request {
+  return {
+    id: row.id,
+    title: row.title,
+    person: row.person ?? null,
+    type: row.type,
+    priority: row.priority,
+    deadline: row.deadline ?? null,
+    status: row.status,
+    notes: row.notes ?? null,
+    description: row.description ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    completed_at: row.completed_at ?? null,
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -180,7 +212,7 @@ function generateTitle(text: string, person: string | null, type: string): strin
   return c.length > 2 ? c[0].toUpperCase() + c.slice(1) : `${type} request`;
 }
 
-function parseInput(text: string): Omit<Request, "id" | "createdAt" | "updatedAt" | "completedAt"> {
+function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_at" | "completed_at"> {
   const t = text.trim();
   const person = extractPerson(t);
   const type = extractType(t);
@@ -434,21 +466,21 @@ function InsightsSpark({ items }: { items: Request[] }) {
   const days = Array.from({ length: 14 }, (_, i) => {
     const d = new Date(today); d.setDate(d.getDate() - (13 - i));
     const key = d.toISOString().split("T")[0];
-    const added = items.filter(x => x.createdAt && new Date(x.createdAt).toISOString().split("T")[0] === key).length;
-    const done  = items.filter(x => x.completedAt && new Date(x.completedAt).toISOString().split("T")[0] === key).length;
+    const added = items.filter(x => x.created_at && new Date(x.created_at).toISOString().split("T")[0] === key).length;
+    const done  = items.filter(x => x.completed_at && new Date(x.completed_at).toISOString().split("T")[0] === key).length;
     return { date: key, added, done, label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }) };
   });
 
   const doneThisWeek = items.filter(x => {
-    if (x.status !== "done" || !x.completedAt) return false;
+    if (x.status !== "done" || !x.completed_at) return false;
     const d = new Date(today); d.setDate(d.getDate() - 7);
-    return new Date(x.completedAt) >= d;
+    return new Date(x.completed_at) >= d;
   }).length;
   const doneLastWeek = items.filter(x => {
-    if (x.status !== "done" || !x.completedAt) return false;
+    if (x.status !== "done" || !x.completed_at) return false;
     const start = new Date(today); start.setDate(start.getDate() - 14);
     const end   = new Date(today); end.setDate(end.getDate() - 7);
-    return new Date(x.completedAt) >= start && new Date(x.completedAt) < end;
+    return new Date(x.completed_at) >= start && new Date(x.completed_at) < end;
   }).length;
   const velocity = doneThisWeek - doneLastWeek;
 
@@ -794,37 +826,71 @@ export default function App() {
   const [filter,       setFilter]       = useState("all");
   const [showInsights, setShowInsights] = useState(false);
   const [editingItem,  setEditingItem]  = useState<Request | null>(null);
-  const [toast, setToast] = useState<{ msg: string; type?: "success" | "error" } | null>(null);
+  const [toast, setToast]   = useState<{ msg: string; type?: "success" | "error" } | null>(null);
+  const [items, setItems]   = useState<Request[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const showToast = useCallback((msg: string, type: "success" | "error" = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2800);
   }, []);
 
-  const { data: items = [] } = useQuery<Request[]>({
-    queryKey: ["/api/requests"],
-    refetchInterval: 12000,
-  });
+  // ── Fetch all requests ──
+  const fetchItems = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("requests")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (!error && data) setItems(data.map(rowToRequest));
+  }, []);
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/requests", data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/requests"] }); showToast("Request added"); },
-    onError: () => showToast("Failed to add", "error"),
-  });
+  useEffect(() => {
+    fetchItems();
+    // Real-time subscription
+    const channel = supabase
+      .channel("requests")
+      .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, () => fetchItems())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchItems]);
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/requests/${id}`, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/requests"] }),
-  });
+  // ── Create ──
+  const createRequest = useCallback(async (data: Omit<Request, "id" | "created_at" | "updated_at" | "completed_at">) => {
+    setLoading(true);
+    const { error } = await supabase.from("requests").insert([{
+      title: data.title,
+      person: data.person,
+      type: data.type,
+      priority: data.priority,
+      deadline: data.deadline,
+      status: data.status,
+      notes: data.notes || "",
+      description: data.description || "",
+    }]);
+    setLoading(false);
+    if (error) { showToast("Failed to add", "error"); return; }
+    showToast("Request added");
+    fetchItems();
+  }, [fetchItems, showToast]);
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/requests/${id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/requests"] }); showToast("Deleted"); },
-  });
+  // ── Update ──
+  const updateRequest = useCallback(async (id: string, data: Partial<Request>) => {
+    const patch: any = { ...data, updated_at: new Date().toISOString() };
+    // Auto-set completed_at when marking done
+    if (data.status === "done") patch.completed_at = new Date().toISOString();
+    if (data.status && data.status !== "done") patch.completed_at = null;
+    await supabase.from("requests").update(patch).eq("id", id);
+    fetchItems();
+  }, [fetchItems]);
+
+  // ── Delete ──
+  const deleteRequest = useCallback(async (id: string) => {
+    await supabase.from("requests").delete().eq("id", id);
+    showToast("Deleted");
+    fetchItems();
+  }, [fetchItems, showToast]);
 
   const handleInput = useCallback((text: string) => {
-    const lower = text.toLowerCase().trim();
-
     // "done with X" / "complete X" / "finish X"
     if (/^(?:done|finish|complete)\s/i.test(text)) {
       const kw = text.replace(/^(?:done|finished?|completed?)\s+(?:with\s+|the\s+)?/i, "").trim();
@@ -832,7 +898,7 @@ export default function App() {
         i.status !== "done" && fuzzyMatch(i.title + " " + (i.person || ""), kw)
       );
       if (found) {
-        updateMutation.mutate({ id: found.id, data: { status: "done" } });
+        updateRequest(found.id, { status: "done" });
         showToast(`✓ Done: ${found.title}`);
         return;
       }
@@ -845,20 +911,19 @@ export default function App() {
         i.status === "inbox" && fuzzyMatch(i.title + " " + (i.person || ""), kw)
       );
       if (found) {
-        updateMutation.mutate({ id: found.id, data: { status: "in-progress" } });
+        updateRequest(found.id, { status: "in-progress" });
         showToast(`Started: ${found.title}`);
         return;
       }
     }
 
     // Default: create
-    const parsed = parseInput(text);
-    createMutation.mutate(parsed);
-  }, [items, createMutation, updateMutation, showToast]);
+    createRequest(parseInput(text));
+  }, [items, createRequest, updateRequest, showToast]);
 
-  const handleMove   = (id: string, status: string) => updateMutation.mutate({ id, data: { status } });
-  const handleDelete = (id: string) => deleteMutation.mutate(id);
-  const handleSave   = (id: string, data: Partial<Request>) => { updateMutation.mutate({ id, data }); showToast("Saved"); };
+  const handleMove   = (id: string, status: string) => updateRequest(id, { status });
+  const handleDelete = (id: string) => deleteRequest(id);
+  const handleSave   = (id: string, data: Partial<Request>) => { updateRequest(id, data); showToast("Saved"); };
 
   const filtered = filter === "all" ? items : items.filter(i => i.type === filter);
   const score    = workloadScore(items);
@@ -968,7 +1033,7 @@ export default function App() {
 
           {/* ── Command strip ── */}
           <div className="px-4 py-3 border-t border-white/[0.06] bg-[hsl(222_20%_8%)] shrink-0">
-            <CommandInput onSubmit={handleInput} isLoading={createMutation.isPending} />
+            <CommandInput onSubmit={handleInput} isLoading={loading} />
             <div className="flex items-center gap-3 mt-2 px-0.5">
               <span className="text-[10.5px] text-muted-foreground">
                 <kbd className="px-1 py-0.5 rounded bg-white/[0.05] text-[9.5px]">Enter</kbd> to add ·{" "}

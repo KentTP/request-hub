@@ -2500,7 +2500,7 @@ export default function App() {
             items={items}
             workLogs={workLogs}
             onClose={() => setProjectModal(null)}
-            onOpenItem={item => { setProjectModal(null); openItem(item); }}
+            onOpenItem={item => { setProjectModal(null); setEditingItem(item); }}
             onAddLog={addWorkLog}
             onDeleteLog={deleteWorkLog}
             onEditLog={updateWorkLog}

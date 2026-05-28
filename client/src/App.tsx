@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
+import paLogoUrl from "@assets/pa-logo.jpg";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -1731,12 +1732,11 @@ export default function App() {
       {/* ── Header ── */}
       <header className="flex items-center gap-3 px-5 h-[48px] border-b border-white/[0.06] bg-[hsl(222_20%_7%)] shrink-0 z-20">
         <div className="flex items-center gap-2 mr-1 shrink-0">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <rect width="20" height="20" rx="5" fill="hsl(207 85% 52%)" />
-            <path d="M5 6.5h10M5 10h7M5 13.5h8.5" stroke="hsl(222 20% 8%)" strokeWidth="1.8" strokeLinecap="round"/>
-          </svg>
+          <img src={paLogoUrl} alt="Kent's PA" width={26} height={26}
+            style={{ filter: "invert(1)", opacity: 0.9 }}
+            className="shrink-0" />
           <span className="font-display font-bold text-[14px] tracking-tight text-foreground">
-            Request<span style={{ color: "hsl(207 85% 52%)" }}>Hub</span>
+            Kent's<span style={{ color: "hsl(207 85% 52%)" }}> PA</span>
           </span>
         </div>
 

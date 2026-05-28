@@ -1874,7 +1874,7 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
     const desc = logText.trim();
     if (!desc) return;
     setSubmitting(true);
-    const mins = logDuration ? parseInt(logDuration, 10) || undefined : undefined;
+    const mins = logDuration ? Math.round(parseFloat(logDuration) * 60) || undefined : undefined;
     await onAddLog(projectName, desc, logDate, mins);
     setLogText(""); setLogDuration(""); setLogDate(new Date().toISOString().split("T")[0]);
     setSubmitting(false);
@@ -1958,7 +1958,7 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
                   <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <Timer size={11} />
                     <input type="number" value={logDuration} onChange={e => setLogDuration(e.target.value)}
-                      placeholder="mins" min={1} max={999}
+                      placeholder="hrs" min={0.25} max={24} step={0.25}
                       className="w-16 bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
                   </div>
                   <button onClick={handleAddLog} disabled={!logText.trim() || submitting}
@@ -2010,7 +2010,7 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
                                   <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                                     <Timer size={10} />
                                     <input type="number" value={editLogDuration} onChange={e => setEditLogDuration(e.target.value)}
-                                      placeholder="mins" min={1} max={999}
+                                      placeholder="hrs" min={0.25} max={24} step={0.25}
                                       className="w-14 bg-[hsl(222_18%_10%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
                                   </div>
                                   <div className="ml-auto flex items-center gap-1.5">
@@ -2019,7 +2019,7 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
                                     <button onClick={async () => {
                                       const desc = editLogText.trim();
                                       if (!desc) return;
-                                      const mins = editLogDuration ? parseInt(editLogDuration, 10) || undefined : undefined;
+                                      const mins = editLogDuration ? Math.round(parseFloat(editLogDuration) * 60) || undefined : undefined;
                                       await onEditLog(log.id, desc, editLogDate, mins);
                                       setEditingLogId(null);
                                     }}
@@ -2031,7 +2031,7 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
                             ) : (
                               /* ── View mode ── */
                               <div key={log.id} className="group flex items-start gap-2.5 rounded-lg px-3 py-2 bg-[hsl(222_18%_11%)] hover:bg-[hsl(222_18%_13%)] transition-colors cursor-pointer"
-                                onClick={() => { setEditingLogId(log.id); setEditLogText(log.description); setEditLogDate(log.log_date); setEditLogDuration(log.duration_mins ? String(log.duration_mins) : ""); }}>
+                                onClick={() => { setEditingLogId(log.id); setEditLogText(log.description); setEditLogDate(log.log_date); setEditLogDuration(log.duration_mins ? String(Math.round(log.duration_mins / 60 * 100) / 100) : ""); }}>
                                 <div className="w-1 h-1 rounded-full mt-1.5 shrink-0" style={{ background: accentColor }} />
                                 <p className="flex-1 text-[12px] text-foreground/85 leading-relaxed">{log.description}</p>
                                 <div className="flex items-center gap-2 shrink-0">

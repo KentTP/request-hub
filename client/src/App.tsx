@@ -1,8 +1,20 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  PieChart, Pie, Cell, BarChart, Bar,
+} from "recharts";
+import {
+  Zap, Clock, CheckCircle2, AlertTriangle, ChevronRight, X,
+  Send, Sparkles, BarChart3, Trash2, ArrowRight,
+  TrendingUp, TrendingDown, Minus, Calendar,
+  User, Tag, ChevronDown, RefreshCw, Target, CalendarDays,
+  Layers, GitMerge,
+} from "lucide-react";
 
-// Local Request type matching Supabase schema
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 type Request = {
   id: string;
   title: string;
@@ -17,17 +29,9 @@ type Request = {
   updated_at: string;
   completed_at: string | null;
 };
-import {
-  AreaChart, Area, ResponsiveContainer, Tooltip, XAxis,
-} from "recharts";
-import {
-  Zap, Clock, CheckCircle2, AlertTriangle, ChevronRight, X,
-  Send, Sparkles, BarChart3, Trash2, ArrowRight,
-  TrendingUp, TrendingDown, Minus, Calendar,
-  User, Tag, ChevronDown, RefreshCw, Target,
-} from "lucide-react";
 
-// Supabase helpers — map DB snake_case ↔ camelCase lightly
+// ─── Supabase row mapper ──────────────────────────────────────────────────────
+
 function rowToRequest(row: any): Request {
   return {
     id: row.id,
@@ -100,9 +104,49 @@ function workloadScore(items: Request[]): number {
   return Math.min(100, score);
 }
 
-// ─── NLP Parser ──────────────────────────────────────────────────────────────
+// ─── Smart NLP ───────────────────────────────────────────────────────────────
 
 const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+const MONTH_NAMES = new Set(["january","february","march","april","may","june","july","august","september","october","november","december","jan","feb","mar","apr","jun","jul","aug","sep","oct","nov","dec"]);
+
+// Levenshtein distance for fuzzy title matching
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// Similarity score 0–1: combines Levenshtein + token overlap
+function titleSimilarity(a: string, b: string): number {
+  const na = a.toLowerCase().trim();
+  const nb = b.toLowerCase().trim();
+  if (na === nb) return 1;
+  const maxLen = Math.max(na.length, nb.length);
+  if (maxLen === 0) return 1;
+  const levScore = 1 - levenshtein(na, nb) / maxLen;
+  // Token overlap bonus
+  const wordsA = new Set(na.split(/\s+/).filter(w => w.length > 2));
+  const wordsB = nb.split(/\s+/).filter(w => w.length > 2);
+  const overlap = wordsB.filter(w => wordsA.has(w)).length;
+  const tokenScore = wordsB.length > 0 ? overlap / Math.max(wordsA.size, wordsB.length) : 0;
+  return Math.max(levScore, tokenScore * 0.9);
+}
+
+// Find closest existing title match — returns { item, score } or null if below threshold
+function findSimilarItem(title: string, items: Request[], threshold = 0.72): { item: Request; score: number } | null {
+  let best: { item: Request; score: number } | null = null;
+  for (const item of items) {
+    const score = titleSimilarity(title, item.title);
+    if (score >= threshold && (!best || score > best.score)) {
+      best = { item, score };
+    }
+  }
+  return best;
+}
 
 function parseDeadline(text: string): string | null {
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -144,9 +188,6 @@ function parseDeadline(text: string): string | null {
   return null;
 }
 
-// Month names to avoid extracting as person names
-const MONTH_NAMES = new Set(["january","february","march","april","may","june","july","august","september","october","november","december","jan","feb","mar","apr","jun","jul","aug","sep","oct","nov","dec"]);
-
 function extractPerson(text: string): string | null {
   const patterns = [
     /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:asked|wants|needs|has asked|sent)\b/,
@@ -183,7 +224,6 @@ function extractPriority(text: string): string {
 
 function generateTitle(text: string, person: string | null, type: string): string {
   let c = text;
-  // Remove person references
   if (person) {
     const e = person.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     c = c.replace(new RegExp(`^${e}(?:'s?)?\\s+(?:asked me to|wants me to|needs|asked|wants)\\s*`, "i"), "");
@@ -192,37 +232,46 @@ function generateTitle(text: string, person: string | null, type: string): strin
     c = c.replace(new RegExp(`\\s+from\\s+${e}\\b`, "i"), "");
     c = c.replace(new RegExp(`\\s+by\\s+${e}\\b`, "i"), "");
   }
-  // Remove leading action verbs
   c = c.replace(/^(?:to\s+)?(?:review|check|look at|help with|evaluate|read through|give feedback on)\s*/i, "");
-  // Remove deadline phrases (order matters — most specific first)
   const monthPat = MONTHS.join("|");
   c = c.replace(new RegExp(`[,\\s]*(?:by|before|due in?|due)\\s+(?:end of\\s+)?(?:this\\s+)?(?:week|month|today|tomorrow|monday|tuesday|wednesday|thursday|friday|eow)\\b`, "ig"), "");
   c = c.replace(new RegExp(`[,\\s]*(?:by|before|due)\\s+\\d{1,2}\\s+(?:${monthPat})\\w*`, "ig"), "");
-  c = c.replace(new RegExp(`[,\\s]*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*)\\s+\\d{1,2}\\b`, "ig"), ""); // "June 30" standalone
-  c = c.replace(new RegExp(`[,\\s]*(?:by|before|due)\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\b`, "ig"), ""); // "by June"
+  c = c.replace(new RegExp(`[,\\s]*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*)\\s+\\d{1,2}\\b`, "ig"), "");
+  c = c.replace(new RegExp(`[,\\s]*(?:by|before|due)\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\b`, "ig"), "");
   c = c.replace(/[,\s]*(?:by|before|due)\s+\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/ig, "");
-  c = c.replace(/[,\s]*(?:by|before|due)\s+\d{1,2}\b/ig, ""); // e.g. "by 15"
+  c = c.replace(/[,\s]*(?:by|before|due)\s+\d{1,2}\b/ig, "");
   c = c.replace(/[,\s]*\bin\s+\d+\s+days?\b/ig, "");
   c = c.replace(/[,\s]*\bnext\s+week\b/ig, "");
-  c = c.replace(/\bdue\b\s*/ig, ""); // stray "due" word
-  // Remove priority modifiers
+  c = c.replace(/\bdue\b\s*/ig, "");
   c = c.replace(/[,\s]*(?:urgent|asap|high priority|high|low priority|no rush|not urgent|can wait|important)\b/ig, "");
-  // Clean up
   c = c.replace(/\s+/g, " ").replace(/^[,.\-–\s]+|[,.\-–\s]+$/g, "").trim();
   return c.length > 2 ? c[0].toUpperCase() + c.slice(1) : `${type} request`;
 }
 
+// Smart parse: first line treated as explicit project/title if multiline
 function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_at" | "completed_at"> {
-  const t = text.trim();
-  const person = extractPerson(t);
-  const type = extractType(t);
-  const priority = extractPriority(t);
-  const deadline = parseDeadline(t);
-  const title = generateTitle(t, person, type);
-  return { title, person: person || null, type, priority, deadline: deadline || null, status: "inbox", notes: "", description: t };
+  const lines = text.trim().split("\n").map(l => l.trim()).filter(Boolean);
+  let titleOverride: string | null = null;
+  let bodyText = text.trim();
+
+  // Multi-line: first line IS the title (explicit project name)
+  if (lines.length > 1) {
+    titleOverride = lines[0];
+    bodyText = lines.slice(1).join(" ");
+  }
+
+  const person = extractPerson(bodyText);
+  const type = extractType(bodyText);
+  const priority = extractPriority(bodyText);
+  const deadline = parseDeadline(bodyText);
+  const title = titleOverride
+    ? titleOverride.replace(/^[,.\-–\s]+|[,.\-–\s]+$/g, "").trim()
+    : generateTitle(bodyText, person, type);
+
+  return { title, person: person || null, type, priority, deadline: deadline || null, status: "inbox", notes: "", description: text.trim() };
 }
 
-// Fuzzy match — returns true if all words in keyword appear in target
+// Fuzzy status/title match for commands
 function fuzzyMatch(target: string, keyword: string): boolean {
   const t = target.toLowerCase();
   const words = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2);
@@ -271,11 +320,54 @@ function WorkloadMeter({ score }: { score: number }) {
   );
 }
 
+// ─── Duplicate Match Banner ───────────────────────────────────────────────────
+
+function MatchBanner({
+  match, onUpdate, onCreateNew, onDismiss,
+}: {
+  match: { item: Request; score: number };
+  onUpdate: () => void;
+  onCreateNew: () => void;
+  onDismiss: () => void;
+}) {
+  const pct = Math.round(match.score * 100);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.18 }}
+      className="flex items-center gap-3 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] text-[11.5px] mt-2"
+    >
+      <GitMerge size={12} className="text-amber-400 shrink-0" />
+      <span className="text-amber-200/80 flex-1 min-w-0">
+        <span className="font-semibold text-amber-300">{pct}% match:</span>{" "}
+        <span className="truncate">&ldquo;{match.item.title}&rdquo;</span>
+        {" "}· <span className={`font-medium ${match.item.status === "done" ? "text-slate-400" : "text-amber-300"}`}>{match.item.status}</span>
+      </span>
+      <button
+        onClick={onUpdate}
+        className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 font-semibold text-[10.5px] transition-colors shrink-0"
+      >
+        Open existing
+      </button>
+      <button
+        onClick={onCreateNew}
+        className="px-2 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 font-semibold text-[10.5px] transition-colors shrink-0"
+      >
+        Create new
+      </button>
+      <button onClick={onDismiss} className="text-slate-500 hover:text-slate-300 transition-colors shrink-0">
+        <X size={12} />
+      </button>
+    </motion.div>
+  );
+}
+
+// ─── Request Card ─────────────────────────────────────────────────────────────
+
 function RequestCard({
-  item,
-  onMove,
-  onDelete,
-  onClick,
+  item, onMove, onDelete, onClick,
 }: {
   item: Request;
   onMove: (id: string, status: string) => void;
@@ -308,7 +400,6 @@ function RequestCard({
       style={{ borderLeftColor: borderColor, borderLeftWidth: 2 }}
       onClick={() => onClick(item)}
     >
-      {/* Top row — badges + hover actions */}
       <div className="flex items-start gap-1.5 mb-2">
         <TypeBadge type={item.type} />
         {item.priority !== "Normal" && (
@@ -324,7 +415,6 @@ function RequestCard({
         <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {item.status === "inbox" && (
             <button
-              data-testid={`btn-start-${item.id}`}
               onClick={e => { e.stopPropagation(); onMove(item.id, "in-progress"); }}
               className="p-1 rounded hover:bg-blue-500/15 text-blue-400/70 hover:text-blue-400 transition-colors"
               title="Start working"
@@ -334,7 +424,6 @@ function RequestCard({
           )}
           {item.status !== "done" && (
             <button
-              data-testid={`btn-done-${item.id}`}
               onClick={e => { e.stopPropagation(); onMove(item.id, "done"); }}
               className="p-1 rounded hover:bg-blue-500/15 text-blue-400/70 hover:text-blue-400 transition-colors"
               title="Mark done"
@@ -344,7 +433,6 @@ function RequestCard({
           )}
           {item.status === "done" && (
             <button
-              data-testid={`btn-reopen-${item.id}`}
               onClick={e => { e.stopPropagation(); onMove(item.id, "inbox"); }}
               className="p-1 rounded hover:bg-white/10 text-muted-foreground transition-colors"
               title="Reopen"
@@ -353,7 +441,6 @@ function RequestCard({
             </button>
           )}
           <button
-            data-testid={`btn-delete-${item.id}`}
             onClick={e => { e.stopPropagation(); onDelete(item.id); }}
             className="p-1 rounded hover:bg-red-500/15 text-red-400/50 hover:text-red-400 transition-colors"
             title="Delete"
@@ -363,12 +450,10 @@ function RequestCard({
         </div>
       </div>
 
-      {/* Title */}
       <p className="text-[13px] font-semibold text-foreground leading-snug mb-2.5 pr-1">
         {item.title}
       </p>
 
-      {/* Meta row */}
       <div className="flex items-center gap-3">
         {item.person && (
           <div className="flex items-center gap-1.5">
@@ -409,7 +494,6 @@ function Column({
       onDragLeave={() => setOver(false)}
       onDrop={e => { e.preventDefault(); setOver(false); const id = e.dataTransfer.getData("id"); if (id) onMove(id, status); }}
     >
-      {/* Column header */}
       <div
         className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06] shrink-0"
         style={{ borderTopColor: accentColor, borderTopWidth: 2, borderTopLeftRadius: "0.75rem", borderTopRightRadius: "0.75rem" }}
@@ -421,7 +505,6 @@ function Column({
         </span>
       </div>
 
-      {/* Cards */}
       <div className="flex-1 overflow-y-auto styled-scroll p-3 flex flex-col gap-2">
         <AnimatePresence mode="popLayout">
           {sorted.length === 0 ? (
@@ -461,112 +544,222 @@ function Column({
 
 // ─── Insights Panel ──────────────────────────────────────────────────────────
 
-function InsightsSpark({ items }: { items: Request[] }) {
+const SENSE_BLUE  = "hsl(207 85% 52%)";
+const SENSE_RED   = "hsl(5 80% 50%)";
+const AMBER       = "hsl(38 92% 55%)";
+const SLATE_DIM   = "hsl(215 12% 42%)";
+
+const TYPE_COLORS: Record<string, string> = {
+  Review:   "#3b9fd4",
+  Proposal: "#f59e0b",
+  Project:  "#60a5fa",
+  Task:     "#94a3b8",
+};
+const PRIORITY_COLORS: Record<string, string> = {
+  Urgent: "#ef4444",
+  High:   "#f59e0b",
+  Normal: "#3b9fd4",
+  Low:    "#64748b",
+};
+
+function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (item: Request) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const days = Array.from({ length: 14 }, (_, i) => {
+
+  // ── Velocity (14 days)
+  const days14 = useMemo(() => Array.from({ length: 14 }, (_, i) => {
     const d = new Date(today); d.setDate(d.getDate() - (13 - i));
     const key = d.toISOString().split("T")[0];
-    const added = items.filter(x => x.created_at && new Date(x.created_at).toISOString().split("T")[0] === key).length;
-    const done  = items.filter(x => x.completed_at && new Date(x.completed_at).toISOString().split("T")[0] === key).length;
-    return { date: key, added, done, label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }) };
-  });
+    const added = items.filter(x => x.created_at?.startsWith(key)).length;
+    const done  = items.filter(x => x.completed_at?.startsWith(key)).length;
+    return { label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }), added, done };
+  }), [items]);
+
+  // ── KPIs
+  const active   = items.filter(i => i.status !== "done");
+  const urgent   = active.filter(i => i.priority === "Urgent");
+  const overdue  = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
+  const total    = items.length;
+  const doneAll  = items.filter(i => i.status === "done").length;
+  const compRate = total > 0 ? Math.round((doneAll / total) * 100) : 0;
 
   const doneThisWeek = items.filter(x => {
     if (x.status !== "done" || !x.completed_at) return false;
-    const d = new Date(today); d.setDate(d.getDate() - 7);
-    return new Date(x.completed_at) >= d;
+    const wk = new Date(today); wk.setDate(wk.getDate() - 7);
+    return new Date(x.completed_at) >= wk;
   }).length;
   const doneLastWeek = items.filter(x => {
     if (x.status !== "done" || !x.completed_at) return false;
-    const start = new Date(today); start.setDate(start.getDate() - 14);
-    const end   = new Date(today); end.setDate(end.getDate() - 7);
-    return new Date(x.completed_at) >= start && new Date(x.completed_at) < end;
+    const s = new Date(today); s.setDate(s.getDate() - 14);
+    const e = new Date(today); e.setDate(e.getDate() - 7);
+    return new Date(x.completed_at) >= s && new Date(x.completed_at) < e;
   }).length;
   const velocity = doneThisWeek - doneLastWeek;
 
-  const active  = items.filter(i => i.status !== "done");
-  const urgent  = active.filter(i => i.priority === "Urgent");
-  const overdue = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
+  // ── Priority donut data
+  const priorityData = ["Urgent","High","Normal","Low"].map(p => ({
+    name: p, value: active.filter(i => i.priority === p).length, color: PRIORITY_COLORS[p],
+  })).filter(d => d.value > 0);
 
+  // ── Type bar
+  const typeData = ["Review","Proposal","Project","Task"].map(t => ({
+    name: t, count: items.filter(i => i.type === t).length, color: TYPE_COLORS[t],
+  })).filter(d => d.count > 0);
+
+  // ── Top requesters
   const byPerson: Record<string, number> = {};
   items.forEach(i => { if (i.person) byPerson[i.person] = (byPerson[i.person] || 0) + 1; });
   const topPeople = Object.entries(byPerson).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   return (
     <div className="flex flex-col gap-3 p-4 overflow-y-auto styled-scroll h-full">
-      {/* KPI 2×2 */}
+
+      {/* ── KPI row ── */}
       <div className="grid grid-cols-2 gap-2">
         {[
-          { label: "Active",       value: active.length,      icon: <Target size={12} />,       color: "hsl(207 85% 52%)" },
-          { label: "Urgent",       value: urgent.length,      icon: <Zap size={12} />,           color: urgent.length ? "hsl(5 80% 50%)" : "hsl(207 85% 52%)" },
-          { label: "Done / week",  value: doneThisWeek,       icon: <CheckCircle2 size={12} />,  color: "hsl(207 85% 52%)" },
-          { label: "Overdue",      value: overdue.length,     icon: <AlertTriangle size={12} />, color: overdue.length ? "hsl(5 80% 50%)" : "hsl(207 85% 52%)" },
+          { label: "Active",      value: active.length,   icon: <Target size={11} />,        color: SENSE_BLUE },
+          { label: "Urgent",      value: urgent.length,   icon: <Zap size={11} />,            color: urgent.length ? SENSE_RED : SENSE_BLUE },
+          { label: "Done / wk",   value: doneThisWeek,    icon: <CheckCircle2 size={11} />,   color: SENSE_BLUE },
+          { label: "Overdue",     value: overdue.length,  icon: <AlertTriangle size={11} />,  color: overdue.length ? SENSE_RED : SENSE_BLUE },
         ].map(kpi => (
           <div key={kpi.label} className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-2.5">
-            <div className="flex items-center gap-1 mb-1.5" style={{ color: kpi.color }}>
+            <div className="flex items-center gap-1 mb-1" style={{ color: kpi.color }}>
               {kpi.icon}
-              <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground leading-none">{kpi.label}</span>
+              <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{kpi.label}</span>
             </div>
-            <div className="text-xl font-display font-bold tabular" style={{ color: kpi.color }}>{kpi.value}</div>
+            <div className="text-2xl font-display font-bold tabular" style={{ color: kpi.color }}>{kpi.value}</div>
           </div>
         ))}
       </div>
 
-      {/* Velocity sparkline */}
-      <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Velocity · 14 days</span>
-          <div className={`flex items-center gap-1 text-[10px] font-semibold ${velocity > 0 ? "text-blue-400" : velocity < 0 ? "text-red-400" : "text-muted-foreground"}`}>
+      {/* ── Completion ring + velocity ── */}
+      <div className="grid grid-cols-2 gap-2">
+        {/* Completion ring */}
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex flex-col items-center justify-center gap-1">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Completion</span>
+          <div className="relative w-[64px] h-[64px]">
+            <PieChart width={64} height={64}>
+              <Pie data={[{v: compRate},{v: 100 - compRate}]} dataKey="v" cx={28} cy={28} innerRadius={22} outerRadius={30} startAngle={90} endAngle={-270} strokeWidth={0}>
+                <Cell fill={SENSE_BLUE} />
+                <Cell fill="hsl(222 15% 18%)" />
+              </Pie>
+            </PieChart>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-[13px] font-bold tabular" style={{ color: SENSE_BLUE }}>{compRate}%</span>
+            </div>
+          </div>
+          <span className="text-[9.5px] text-muted-foreground tabular">{doneAll}/{total} done</span>
+        </div>
+
+        {/* Velocity delta */}
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex flex-col justify-between">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Velocity</span>
+          <div className="flex items-end gap-1.5 mt-1">
+            <span className={`text-2xl font-display font-bold tabular ${velocity > 0 ? "text-blue-400" : velocity < 0 ? "text-red-400" : "text-slate-400"}`}>
+              {velocity > 0 ? "+" : ""}{velocity}
+            </span>
+            <span className="text-[10px] text-muted-foreground mb-1">vs last wk</span>
+          </div>
+          <div className={`flex items-center gap-1 text-[10px] font-medium mt-0.5 ${velocity > 0 ? "text-blue-400" : velocity < 0 ? "text-red-400" : "text-muted-foreground"}`}>
             {velocity > 0 ? <TrendingUp size={10} /> : velocity < 0 ? <TrendingDown size={10} /> : <Minus size={10} />}
-            <span>{velocity > 0 ? `+${velocity}` : velocity} vs last wk</span>
+            <span>{doneThisWeek} completed</span>
           </div>
         </div>
-        <div className="h-[64px] -mx-1">
+      </div>
+
+      {/* ── Velocity sparkline ── */}
+      <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Activity · 14 days</span>
+        <div className="h-[56px]">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={days} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+            <AreaChart data={days14} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
               <defs>
                 <linearGradient id="gDone" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="hsl(207 85% 52%)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="hsl(207 85% 52%)" stopOpacity={0} />
+                  <stop offset="5%"  stopColor="#3b9fd4" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#3b9fd4" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="gAdded" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="hsl(213 80% 58%)" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="hsl(213 80% 58%)" stopOpacity={0} />
+                  <stop offset="5%"  stopColor="#94a3b8" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis dataKey="label" hide />
               <Tooltip
-                contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 11 }}
-                labelStyle={{ color: "hsl(210 20% 80%)" }}
+                contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 11, padding: "4px 10px" }}
+                labelStyle={{ color: "hsl(210 20% 80%)", marginBottom: 2 }}
                 itemStyle={{ color: "hsl(210 15% 65%)" }}
               />
-              <Area type="monotone" dataKey="added" stroke="hsl(213 80% 58%)" strokeWidth={1.5} fill="url(#gAdded)" name="Added" />
-              <Area type="monotone" dataKey="done"  stroke="hsl(207 85% 52%)" strokeWidth={1.5} fill="url(#gDone)"  name="Completed" />
+              <Area type="monotone" dataKey="added" stroke="#94a3b8" strokeWidth={1.5} fill="url(#gAdded)" name="Added" dot={false} />
+              <Area type="monotone" dataKey="done"  stroke="#3b9fd4" strokeWidth={1.5} fill="url(#gDone)"  name="Completed" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
         <div className="flex items-center gap-4 mt-1.5">
-          <div className="flex items-center gap-1.5"><div className="w-2 h-0.5 rounded bg-blue-400" /><span className="text-[9.5px] text-muted-foreground">Completed</span></div>
-          <div className="flex items-center gap-1.5"><div className="w-2 h-0.5 rounded bg-blue-400"  /><span className="text-[9.5px] text-muted-foreground">Added</span></div>
+          <div className="flex items-center gap-1.5"><div className="w-2 h-0.5 rounded bg-blue-400" /><span className="text-[9px] text-muted-foreground">Completed</span></div>
+          <div className="flex items-center gap-1.5"><div className="w-2 h-0.5 rounded bg-slate-400/60" /><span className="text-[9px] text-muted-foreground">Added</span></div>
         </div>
       </div>
 
-      {/* Top requesters */}
+      {/* ── Priority breakdown ── */}
+      {priorityData.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Priority Split (active)</span>
+          <div className="flex items-center gap-3">
+            <PieChart width={56} height={56}>
+              <Pie data={priorityData} dataKey="value" cx={24} cy={24} innerRadius={16} outerRadius={26} strokeWidth={0}>
+                {priorityData.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Pie>
+            </PieChart>
+            <div className="flex flex-col gap-1 flex-1">
+              {priorityData.map(d => (
+                <div key={d.name} className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-sm shrink-0" style={{ background: d.color }} />
+                  <span className="text-[10.5px] text-foreground flex-1">{d.name}</span>
+                  <span className="text-[10.5px] font-bold tabular text-muted-foreground">{d.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Type distribution ── */}
+      {typeData.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Type Distribution</span>
+          <div className="h-[44px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={typeData} layout="vertical" margin={{ top: 0, right: 28, left: 0, bottom: 0 }}>
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="name" width={52} tick={{ fontSize: 10, fill: "hsl(215 15% 58%)" }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 11 }}
+                  cursor={{ fill: "hsl(222 15% 20%)" }}
+                />
+                <Bar dataKey="count" radius={[0, 3, 3, 0]} maxBarSize={10}>
+                  {typeData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top requesters ── */}
       {topPeople.length > 0 && (
         <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-2.5">Top Requesters</span>
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2.5">Top Requesters</span>
           <div className="flex flex-col gap-2">
             {topPeople.map(([name, count]) => {
               const max = topPeople[0][1];
               return (
                 <div key={name} className="flex items-center gap-2">
                   <Avatar name={name} size={18} />
-                  <span className="text-[11.5px] text-foreground flex-1 truncate">{name}</span>
+                  <span className="text-[11px] text-foreground flex-1 truncate">{name}</span>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <div className="w-14 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div className="w-14 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                       <div className="h-full rounded-full bg-blue-500/60 transition-all" style={{ width: `${(count / max) * 100}%` }} />
                     </div>
-                    <span className="text-[10.5px] font-bold tabular text-muted-foreground w-3 text-right">{count}</span>
+                    <span className="text-[10px] font-bold tabular text-muted-foreground w-3 text-right">{count}</span>
                   </div>
                 </div>
               );
@@ -575,24 +768,144 @@ function InsightsSpark({ items }: { items: Request[] }) {
         </div>
       )}
 
-      {/* Overdue list */}
+      {/* ── Overdue items ── */}
       {overdue.length > 0 && (
         <div className="rounded-lg border border-red-500/25 bg-red-500/[0.04] p-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-red-400/80 block mb-2">Overdue · {overdue.length}</span>
+          <span className="text-[9px] font-bold uppercase tracking-wider text-red-400/80 block mb-2">Overdue · {overdue.length}</span>
           <div className="flex flex-col gap-1.5">
             {overdue.slice(0, 5).map(item => {
               const dl = deadlineInfo(item.deadline);
               return (
-                <div key={item.id} className="flex items-center gap-2">
+                <button key={item.id} onClick={() => onOpenItem(item)} className="flex items-center gap-2 text-left hover:bg-red-500/[0.06] rounded px-1 py-0.5 transition-colors w-full">
                   <div className="w-1 h-1 rounded-full bg-red-500 shrink-0" />
-                  <span className="text-[11.5px] text-foreground flex-1 truncate">{item.title}</span>
-                  <span className="text-[10.5px] text-red-400 shrink-0">{dl?.text}</span>
-                </div>
+                  <span className="text-[11px] text-foreground flex-1 truncate">{item.title}</span>
+                  <span className="text-[10px] text-red-400 shrink-0 font-medium">{dl?.text}</span>
+                </button>
               );
             })}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Weekly Review ────────────────────────────────────────────────────────────
+
+function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (item: Request) => void }) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today); d.setDate(d.getDate() - (6 - i));
+    const key = d.toISOString().split("T")[0];
+    const isToday = i === 6;
+    const added     = items.filter(x => x.created_at?.startsWith(key));
+    const completed = items.filter(x => x.completed_at?.startsWith(key));
+    const updated   = items.filter(x =>
+      x.updated_at?.startsWith(key) &&
+      !x.created_at?.startsWith(key) &&
+      !x.completed_at?.startsWith(key)
+    );
+    return { key, d, isToday, added, completed, updated, label: isToday ? "Today" : d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) };
+  }), [items]);
+
+  // Week summary stats
+  const weekAdded     = days.reduce((s, d) => s + d.added.length, 0);
+  const weekCompleted = days.reduce((s, d) => s + d.completed.length, 0);
+  const busiestDay    = [...days].sort((a, b) => (b.added.length + b.completed.length) - (a.added.length + a.completed.length))[0];
+  const activePeople  = new Set(items.flatMap(i => i.person ? [i.person] : [])).size;
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Week summary header */}
+      <div className="shrink-0 px-5 py-4 border-b border-white/[0.06] bg-[hsl(222_20%_7%)]">
+        <div className="flex items-center gap-2 mb-3">
+          <CalendarDays size={14} className="text-blue-400" />
+          <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Week in Review</span>
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {days[0].d.toLocaleDateString("en-CA", { month: "short", day: "numeric" })} – {days[6].d.toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+          </span>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: "Added",     value: weekAdded,     color: SENSE_BLUE },
+            { label: "Completed", value: weekCompleted, color: "#4ade80" },
+            { label: "Busiest",   value: busiestDay.label.split(",")[0], color: AMBER },
+            { label: "People",    value: activePeople,  color: "#a78bfa" },
+          ].map(s => (
+            <div key={s.label} className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_11%)] px-3 py-2">
+              <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">{s.label}</div>
+              <div className="text-[18px] font-display font-bold tabular leading-none" style={{ color: s.color }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Daily rows */}
+      <div className="flex-1 overflow-y-auto styled-scroll px-5 py-3 flex flex-col gap-3">
+        {[...days].reverse().map(day => {
+          const total = day.added.length + day.completed.length + day.updated.length;
+          return (
+            <div key={day.key}
+              className={`rounded-xl border ${day.isToday ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-white/[0.06] bg-[hsl(222_18%_10%)]"}`}
+            >
+              {/* Day header */}
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/[0.05]">
+                <span className={`text-[11px] font-bold ${day.isToday ? "text-blue-300" : "text-foreground"}`}>{day.label}</span>
+                {total === 0 && <span className="text-[10px] text-muted-foreground/50 ml-1">— quiet day</span>}
+                {total > 0 && (
+                  <div className="ml-auto flex items-center gap-2">
+                    {day.added.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        <span className="text-blue-400 font-semibold">+{day.added.length}</span> added
+                      </span>
+                    )}
+                    {day.completed.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        <span className="text-green-400 font-semibold">✓{day.completed.length}</span> done
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Day events */}
+              {total > 0 && (
+                <div className="px-4 py-2.5 flex flex-col gap-1.5">
+                  {day.completed.map(item => (
+                    <button key={`done-${item.id}`} onClick={() => onOpenItem(item)}
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1 py-0.5 transition-colors w-full group"
+                    >
+                      <CheckCircle2 size={11} className="text-green-400 shrink-0" />
+                      <span className="text-[11.5px] text-foreground flex-1 truncate line-through opacity-60">{item.title}</span>
+                      <TypeBadge type={item.type} />
+                    </button>
+                  ))}
+                  {day.added.map(item => (
+                    <button key={`added-${item.id}`} onClick={() => onOpenItem(item)}
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1 py-0.5 transition-colors w-full group"
+                    >
+                      <div className="w-2 h-2 rounded-full border border-blue-400/60 shrink-0" />
+                      <span className="text-[11.5px] text-foreground flex-1 truncate">{item.title}</span>
+                      {item.person && <span className="text-[10px] text-muted-foreground shrink-0">{item.person}</span>}
+                      <TypeBadge type={item.type} />
+                    </button>
+                  ))}
+                  {day.updated.map(item => (
+                    <button key={`upd-${item.id}`} onClick={() => onOpenItem(item)}
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1 py-0.5 transition-colors w-full group"
+                    >
+                      <RefreshCw size={10} className="text-muted-foreground/50 shrink-0" />
+                      <span className="text-[11.5px] text-muted-foreground flex-1 truncate">{item.title}</span>
+                      <span className="text-[10px] text-muted-foreground/50 shrink-0">updated</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -617,7 +930,7 @@ function EditModal({
   const [status,   setStatus]   = useState(item.status);
 
   const dl = deadlineInfo(item.deadline);
-  const typeColor = type === "Review" ? "hsl(213 80% 58%)" : type === "Proposal" ? "hsl(38 92% 55%)" : type === "Project" ? "hsl(207 85% 52%)" : "hsl(215 12% 45%)";
+  const typeColor = type === "Review" ? SENSE_BLUE : type === "Proposal" ? AMBER : type === "Project" ? "#60a5fa" : SLATE_DIM;
 
   return (
     <motion.div
@@ -635,10 +948,8 @@ function EditModal({
         className="relative w-[500px] max-w-full max-h-[90vh] bg-[hsl(222_18%_11%)] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden flex flex-col"
         data-testid="modal-edit"
       >
-        {/* Type colour stripe */}
         <div className="h-0.5 w-full shrink-0" style={{ background: typeColor }} />
 
-        {/* Modal header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06] shrink-0">
           <div className="flex items-center gap-2.5">
             <TypeBadge type={type} />
@@ -650,7 +961,6 @@ function EditModal({
         </div>
 
         <div className="flex-1 overflow-y-auto styled-scroll px-5 py-4 flex flex-col gap-4">
-          {/* Title field */}
           <input
             data-testid="input-title"
             value={title}
@@ -660,7 +970,6 @@ function EditModal({
             autoFocus
           />
 
-          {/* Type + Priority */}
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: "Type",     value: type,     onChange: setType,     options: ["Review","Proposal","Project","Task"], icon: <Tag size={11} /> },
@@ -684,7 +993,6 @@ function EditModal({
               </div>
             ))}
 
-            {/* Requester */}
             <div>
               <label className="flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
                 <User size={11} />Requester
@@ -698,7 +1006,6 @@ function EditModal({
               />
             </div>
 
-            {/* Deadline */}
             <div>
               <label className="flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
                 <Calendar size={11} />Deadline
@@ -713,7 +1020,6 @@ function EditModal({
             </div>
           </div>
 
-          {/* Status toggle */}
           <div>
             <label className="text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1.5">Status</label>
             <div className="flex gap-1 p-1 rounded-lg bg-white/[0.04] border border-white/[0.06]">
@@ -730,7 +1036,6 @@ function EditModal({
             </div>
           </div>
 
-          {/* Notes */}
           <div>
             <label className="text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1.5">Notes</label>
             <textarea
@@ -744,7 +1049,6 @@ function EditModal({
           </div>
         </div>
 
-        {/* Footer */}
         <div className="flex items-center gap-2 px-5 py-3 border-t border-white/[0.06] bg-[hsl(222_18%_10%)] shrink-0">
           <button
             data-testid="btn-delete"
@@ -779,7 +1083,13 @@ function EditModal({
 
 // ─── Command Input ────────────────────────────────────────────────────────────
 
-function CommandInput({ onSubmit, isLoading }: { onSubmit: (text: string) => void; isLoading: boolean }) {
+function CommandInput({
+  onSubmit, isLoading, matchBanner,
+}: {
+  onSubmit: (text: string) => void;
+  isLoading: boolean;
+  matchBanner?: React.ReactNode;
+}) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -792,50 +1102,57 @@ function CommandInput({ onSubmit, isLoading }: { onSubmit: (text: string) => voi
   };
 
   return (
-    <div className="relative flex items-end gap-2 bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded-xl px-3 py-2.5 focus-within:border-blue-500/40 transition-colors">
-      <Sparkles size={14} className="text-blue-500/60 mb-1.5 shrink-0" />
-      <textarea
-        ref={ref}
-        data-testid="input-command"
-        value={value}
-        onChange={e => {
-          setValue(e.target.value);
-          e.target.style.height = "auto";
-          e.target.style.height = Math.min(e.target.scrollHeight, 100) + "px";
-        }}
-        onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
-        placeholder="e.g.  Sarah's EIA review by Friday, urgent  —  or  start CLT proposal  —  or  done with seismic report"
-        rows={1}
-        className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground outline-none resize-none leading-relaxed py-0"
-      />
-      <button
-        data-testid="btn-send"
-        onClick={submit}
-        disabled={!value.trim() || isLoading}
-        className="p-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 disabled:opacity-25 disabled:cursor-not-allowed text-white transition-all shrink-0"
-      >
-        <Send size={13} />
-      </button>
+    <div>
+      <div className="relative flex items-end gap-2 bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded-xl px-3 py-2.5 focus-within:border-blue-500/40 transition-colors">
+        <Sparkles size={14} className="text-blue-500/60 mb-1.5 shrink-0" />
+        <textarea
+          ref={ref}
+          data-testid="input-command"
+          value={value}
+          onChange={e => {
+            setValue(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+          }}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          placeholder={"Line 1: project name  ·  Line 2: details, person, deadline\ne.g.  NMB Tower CLT  ↵  Sarah's review by Friday, urgent"}
+          rows={1}
+          className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground outline-none resize-none leading-relaxed py-0"
+        />
+        <button
+          data-testid="btn-send"
+          onClick={submit}
+          disabled={!value.trim() || isLoading}
+          className="p-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 disabled:opacity-25 disabled:cursor-not-allowed text-white transition-all shrink-0"
+        >
+          <Send size={13} />
+        </button>
+      </div>
+      {matchBanner}
     </div>
   );
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
+type ViewMode = "board" | "week";
+
 export default function App() {
   const [filter,       setFilter]       = useState("all");
+  const [viewMode,     setViewMode]     = useState<ViewMode>("board");
   const [showInsights, setShowInsights] = useState(false);
   const [editingItem,  setEditingItem]  = useState<Request | null>(null);
   const [toast, setToast]   = useState<{ msg: string; type?: "success" | "error" } | null>(null);
   const [items, setItems]   = useState<Request[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pendingCreate, setPendingCreate] = useState<{ parsed: Omit<Request, "id"|"created_at"|"updated_at"|"completed_at">; match: { item: Request; score: number } } | null>(null);
 
   const showToast = useCallback((msg: string, type: "success" | "error" = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2800);
   }, []);
 
-  // ── Fetch all requests ──
+  // ── Fetch
   const fetchItems = useCallback(async () => {
     const { data, error } = await supabase
       .from("requests")
@@ -846,7 +1163,6 @@ export default function App() {
 
   useEffect(() => {
     fetchItems();
-    // Real-time subscription
     const channel = supabase
       .channel("requests")
       .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, () => fetchItems())
@@ -854,18 +1170,13 @@ export default function App() {
     return () => { supabase.removeChannel(channel); };
   }, [fetchItems]);
 
-  // ── Create ──
+  // ── Create
   const createRequest = useCallback(async (data: Omit<Request, "id" | "created_at" | "updated_at" | "completed_at">) => {
     setLoading(true);
     const { error } = await supabase.from("requests").insert([{
-      title: data.title,
-      person: data.person,
-      type: data.type,
-      priority: data.priority,
-      deadline: data.deadline,
-      status: data.status,
-      notes: data.notes || "",
-      description: data.description || "",
+      title: data.title, person: data.person, type: data.type,
+      priority: data.priority, deadline: data.deadline,
+      status: data.status, notes: data.notes || "", description: data.description || "",
     }]);
     setLoading(false);
     if (error) { showToast("Failed to add", "error"); return; }
@@ -873,52 +1184,46 @@ export default function App() {
     fetchItems();
   }, [fetchItems, showToast]);
 
-  // ── Update ──
+  // ── Update
   const updateRequest = useCallback(async (id: string, data: Partial<Request>) => {
     const patch: any = { ...data, updated_at: new Date().toISOString() };
-    // Auto-set completed_at when marking done
     if (data.status === "done") patch.completed_at = new Date().toISOString();
     if (data.status && data.status !== "done") patch.completed_at = null;
     await supabase.from("requests").update(patch).eq("id", id);
     fetchItems();
   }, [fetchItems]);
 
-  // ── Delete ──
+  // ── Delete
   const deleteRequest = useCallback(async (id: string) => {
     await supabase.from("requests").delete().eq("id", id);
     showToast("Deleted");
     fetchItems();
   }, [fetchItems, showToast]);
 
+  // ── Smart input handler
   const handleInput = useCallback((text: string) => {
-    // "done with X" / "complete X" / "finish X"
+    // Status commands
     if (/^(?:done|finish|complete)\s/i.test(text)) {
       const kw = text.replace(/^(?:done|finished?|completed?)\s+(?:with\s+|the\s+)?/i, "").trim();
-      const found = items.find(i =>
-        i.status !== "done" && fuzzyMatch(i.title + " " + (i.person || ""), kw)
-      );
-      if (found) {
-        updateRequest(found.id, { status: "done" });
-        showToast(`✓ Done: ${found.title}`);
-        return;
-      }
+      const found = items.find(i => i.status !== "done" && fuzzyMatch(i.title + " " + (i.person || ""), kw));
+      if (found) { updateRequest(found.id, { status: "done" }); showToast(`✓ Done: ${found.title}`); return; }
     }
-
-    // "start X" / "working on X" / "begin X"
     if (/^(?:start|begin|working on)\s/i.test(text)) {
       const kw = text.replace(/^(?:start(?:ing)?|begin(?:ning)?|working on)\s+(?:the\s+)?/i, "").trim();
-      const found = items.find(i =>
-        i.status === "inbox" && fuzzyMatch(i.title + " " + (i.person || ""), kw)
-      );
-      if (found) {
-        updateRequest(found.id, { status: "in-progress" });
-        showToast(`Started: ${found.title}`);
-        return;
-      }
+      const found = items.find(i => i.status === "inbox" && fuzzyMatch(i.title + " " + (i.person || ""), kw));
+      if (found) { updateRequest(found.id, { status: "in-progress" }); showToast(`Started: ${found.title}`); return; }
     }
 
-    // Default: create
-    createRequest(parseInput(text));
+    // Parse + fuzzy de-dupe check
+    const parsed = parseInput(text);
+    const match  = findSimilarItem(parsed.title, items);
+
+    if (match) {
+      // Surface the match — let user decide
+      setPendingCreate({ parsed, match });
+    } else {
+      createRequest(parsed);
+    }
   }, [items, createRequest, updateRequest, showToast]);
 
   const handleMove   = (id: string, status: string) => updateRequest(id, { status });
@@ -931,19 +1236,17 @@ export default function App() {
   const urgentCount = active.filter(i => i.priority === "Urgent").length;
 
   const COLUMNS = [
-    { status: "inbox",       label: "Inbox",       icon: <Clock size={12} />,        accentColor: "hsl(207 85% 52%)" },
-    { status: "in-progress", label: "In Progress",  icon: <Zap size={12} />,          accentColor: "hsl(38 92% 55%)" },
-    { status: "done",        label: "Done",         icon: <CheckCircle2 size={12} />, accentColor: "hsl(215 12% 42%)" },
+    { status: "inbox",       label: "Inbox",       icon: <Clock size={12} />,        accentColor: SENSE_BLUE },
+    { status: "in-progress", label: "In Progress",  icon: <Zap size={12} />,          accentColor: AMBER },
+    { status: "done",        label: "Done",         icon: <CheckCircle2 size={12} />, accentColor: SLATE_DIM },
   ];
-
-  const EXAMPLES = ["Sarah's EIA by Friday", "Review Mike's proposal, urgent", "NMB tender 20 Jun"];
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
 
       {/* ── Header ── */}
       <header className="flex items-center gap-3 px-5 h-[48px] border-b border-white/[0.06] bg-[hsl(222_20%_7%)] shrink-0 z-20">
-        {/* Logo mark */}
+        {/* Logo */}
         <div className="flex items-center gap-2 mr-1 shrink-0">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-label="RequestHub logo">
             <rect width="20" height="20" rx="5" fill="hsl(207 85% 52%)" />
@@ -956,32 +1259,51 @@ export default function App() {
 
         <div className="h-3.5 w-px bg-white/[0.08] mx-0.5" />
 
-        {/* Type filter tabs */}
+        {/* View + filter tabs */}
         <div className="flex items-center gap-0.5">
-          {[["all","All"],["Review","Reviews"],["Proposal","Proposals"],["Project","Projects"],["Task","Tasks"]].map(([k, l]) => (
-            <button
-              key={k}
-              data-testid={`filter-${k}`}
-              onClick={() => setFilter(k)}
-              className={`px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
-                filter === k
-                  ? "bg-white/[0.08] text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"
-              }`}
-            >
-              {l}
-            </button>
-          ))}
+          {/* View toggle */}
+          <button
+            onClick={() => setViewMode("board")}
+            className={`px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all flex items-center gap-1.5 ${
+              viewMode === "board" ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"
+            }`}
+          >
+            <Layers size={11} />Board
+          </button>
+          <button
+            onClick={() => setViewMode("week")}
+            className={`px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all flex items-center gap-1.5 ${
+              viewMode === "week" ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"
+            }`}
+          >
+            <CalendarDays size={11} />Week
+          </button>
+
+          {viewMode === "board" && (
+            <>
+              <div className="h-3 w-px bg-white/[0.08] mx-1" />
+              {[["all","All"],["Review","Reviews"],["Proposal","Proposals"],["Project","Projects"],["Task","Tasks"]].map(([k, l]) => (
+                <button
+                  key={k}
+                  data-testid={`filter-${k}`}
+                  onClick={() => setFilter(k)}
+                  className={`px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
+                    filter === k ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-4">
-          {/* Workload meter */}
           <div className="flex items-center gap-2">
             <span className="text-[10.5px] text-muted-foreground font-medium hidden sm:block">Workload</span>
             <WorkloadMeter score={score} />
           </div>
 
-          {/* Stats pills */}
           <div className="hidden md:flex items-center gap-3">
             <div className="flex items-center gap-1.5 text-[11.5px]">
               <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
@@ -995,7 +1317,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Insights toggle */}
           <button
             data-testid="btn-insights"
             onClick={() => setShowInsights(v => !v)}
@@ -1014,51 +1335,62 @@ export default function App() {
       {/* ── Body ── */}
       <div className="flex flex-1 overflow-hidden relative">
 
-        {/* ── Kanban Board ── */}
+        {/* ── Main content ── */}
         <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="flex-1 overflow-x-auto overflow-y-hidden p-4 pb-0">
-            <div className="flex gap-3 h-full pb-4 min-h-0">
-              {COLUMNS.map(col => (
-                <Column
-                  key={col.status}
-                  {...col}
-                  items={filtered.filter(i => i.status === col.status)}
-                  onMove={handleMove}
-                  onDelete={handleDelete}
-                  onClick={setEditingItem}
-                />
-              ))}
-            </div>
-          </div>
 
-          {/* ── Command strip ── */}
-          <div className="px-4 py-3 border-t border-white/[0.06] bg-[hsl(222_20%_8%)] shrink-0">
-            <CommandInput onSubmit={handleInput} isLoading={loading} />
-            <div className="flex items-center gap-3 mt-2 px-0.5">
-              <span className="text-[10.5px] text-muted-foreground">
-                <kbd className="px-1 py-0.5 rounded bg-white/[0.05] text-[9.5px]">Enter</kbd> to add ·{" "}
-                <kbd className="px-1 py-0.5 rounded bg-white/[0.05] text-[9.5px]">Shift+Enter</kbd> for new line
-              </span>
-              <div className="flex items-center gap-2 ml-auto">
-                {EXAMPLES.map(ex => (
-                  <button
-                    key={ex}
-                    onClick={() => handleInput(ex)}
-                    className="text-[10.5px] text-muted-foreground hover:text-blue-400 transition-colors hidden md:block"
-                  >
-                    {ex.length > 24 ? ex.slice(0, 24) + "…" : ex}
-                  </button>
-                ))}
+          {viewMode === "week" ? (
+            <WeeklyReview items={items} onOpenItem={setEditingItem} />
+          ) : (
+            <>
+              {/* Kanban board */}
+              <div className="flex-1 overflow-x-auto overflow-y-hidden p-4 pb-0">
+                <div className="flex gap-3 h-full pb-4 min-h-0">
+                  {COLUMNS.map(col => (
+                    <Column
+                      key={col.status}
+                      {...col}
+                      items={filtered.filter(i => i.status === col.status)}
+                      onMove={handleMove}
+                      onDelete={handleDelete}
+                      onClick={setEditingItem}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          </div>
+
+              {/* Command strip */}
+              <div className="px-4 py-3 border-t border-white/[0.06] bg-[hsl(222_20%_8%)] shrink-0">
+                <CommandInput
+                  onSubmit={handleInput}
+                  isLoading={loading}
+                  matchBanner={
+                    <AnimatePresence>
+                      {pendingCreate && (
+                        <MatchBanner
+                          match={pendingCreate.match}
+                          onUpdate={() => { setEditingItem(pendingCreate.match.item); setPendingCreate(null); }}
+                          onCreateNew={() => { createRequest(pendingCreate.parsed); setPendingCreate(null); }}
+                          onDismiss={() => setPendingCreate(null)}
+                        />
+                      )}
+                    </AnimatePresence>
+                  }
+                />
+                <div className="flex items-center gap-3 mt-2 px-0.5">
+                  <span className="text-[10.5px] text-muted-foreground">
+                    <kbd className="px-1 py-0.5 rounded bg-white/[0.05] text-[9.5px]">Enter</kbd> to add ·{" "}
+                    <kbd className="px-1 py-0.5 rounded bg-white/[0.05] text-[9.5px]">Shift+Enter</kbd> new line · first line = project name
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* ── Insights panel — slides in from right as overlay ── */}
+        {/* ── Insights panel ── */}
         <AnimatePresence>
           {showInsights && (
             <>
-              {/* Click-outside backdrop (subtle) */}
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1072,7 +1404,7 @@ export default function App() {
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 300, opacity: 0 }}
                 transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                className="absolute right-0 top-0 bottom-0 z-20 w-[280px] border-l border-white/[0.07] bg-[hsl(222_20%_8%)] flex flex-col shadow-2xl"
+                className="absolute right-0 top-0 bottom-0 z-20 w-[300px] border-l border-white/[0.07] bg-[hsl(222_20%_8%)] flex flex-col shadow-2xl"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
@@ -1087,7 +1419,7 @@ export default function App() {
                     <X size={13} />
                   </button>
                 </div>
-                <InsightsSpark items={items} />
+                <InsightsPanel items={items} onOpenItem={(item) => { setEditingItem(item); setShowInsights(false); }} />
               </motion.aside>
             </>
           )}

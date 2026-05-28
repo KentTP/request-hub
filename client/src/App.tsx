@@ -367,7 +367,11 @@ function parseInput(text: string): Omit<Request, "id" | "created_at" | "updated_
 
   // If line1 is a known type keyword, honour it for type detection; otherwise extract from task text
   const typeFromLine1 = genericCategory ? extractType(line1) : null;
-  const type     = typeFromLine1 || extractType(line2 ? taskText : text);
+  const extractedType = typeFromLine1 || extractType(line2 ? taskText : text);
+  // If line1 is a real named project (not generic) and line2 exists, treat as Project
+  // unless the text clearly signals Review/Proposal/BD
+  const hasNamedProject = !!project_name && !genericCategory && !!line2;
+  const type = hasNamedProject && extractedType === "Task" ? "Project" : extractedType;
   const priority = extractPriority(text);
   const deadline = parseDeadline(text);
 
@@ -2192,6 +2196,29 @@ export default function App() {
       .from("requests").select("*").order("created_at", { ascending: false });
     if (!error && data) {
       const mapped = data.map(rowToRequest);
+
+      // ── Auto-migrate: Task items with a real named project_name → Project ──
+      // Items entered with a project name on line 1 were being saved as Task due
+      // to the old default. Silently patch them to Project in Supabase.
+      const toUpgrade = mapped.filter(i =>
+        i.type === "Task" &&
+        i.project_name &&
+        !isGenericProjectName(i.project_name)
+      );
+      if (toUpgrade.length > 0) {
+        const ids = toUpgrade.map(i => i.id);
+        await supabase.from("requests").update({ type: "Project" }).in("id", ids);
+        // Re-fetch after patching so UI reflects correct types
+        const { data: data2 } = await supabase
+          .from("requests").select("*").order("created_at", { ascending: false });
+        if (data2) {
+          const remapped = data2.map(rowToRequest);
+          seedProjectColors(remapped.map(i => i.project_name).filter(Boolean) as string[]);
+          setItems(remapped);
+          return;
+        }
+      }
+
       // Seed project colours deterministically before first render
       seedProjectColors(mapped.map(i => i.project_name).filter(Boolean) as string[]);
       setItems(mapped);

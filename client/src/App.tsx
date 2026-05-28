@@ -89,6 +89,7 @@ const TYPE_META: Record<string, { label: string; cls: string }> = {
   Proposal: { label: "Proposal", cls: "type-proposal" },
   Project:  { label: "Project",  cls: "type-project" },
   Task:     { label: "Task",     cls: "type-task" },
+  BD:       { label: "BD",       cls: "type-bd" },
 };
 
 const PRIORITY_ORDER: Record<string, number> = { Urgent: 0, High: 1, Normal: 2, Low: 3 };
@@ -103,6 +104,7 @@ const TYPE_COLORS: Record<string, string> = {
   Proposal: "#f59e0b",
   Project:  "#60a5fa",
   Task:     "#94a3b8",
+  BD:       "#34d399",
 };
 const PRIORITY_COLORS: Record<string, string> = {
   Urgent: "#ef4444",
@@ -298,6 +300,7 @@ function extractType(text: string): string {
   const l = text.toLowerCase();
   if (/\b(review|look at|evaluate|assess|give feedback|read through|proofread)\b/.test(l)) return "Review";
   if (/\b(proposal|tender|bid|rfp|rfq|pitch|quote)\b/.test(l)) return "Proposal";
+  if (/^bd$|\b(bd|business dev|business development)\b/.test(l)) return "BD";
   if (/\b(project|help with|assist|work on|develop|build|implement|design)\b/.test(l)) return "Project";
   return "Task";
 }
@@ -807,7 +810,7 @@ function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (i
     name: p, value: active.filter(i => i.priority === p).length, color: PRIORITY_COLORS[p],
   })).filter(d => d.value > 0);
 
-  const typeData = ["Review","Proposal","Project","Task"].map(t => ({
+  const typeData = ["Review","Proposal","BD","Project","Task"].map(t => ({
     name: t, count: items.filter(i => i.type === t).length, color: TYPE_COLORS[t],
   })).filter(d => d.count > 0);
 
@@ -1174,7 +1177,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
   const [status,      setStatus]      = useState(item.status);
 
   const dl = deadlineInfo(item.deadline);
-  const typeColor = type === "Review" ? SENSE_BLUE : type === "Proposal" ? AMBER : type === "Project" ? "#60a5fa" : SLATE_DIM;
+  const typeColor = type === "Review" ? SENSE_BLUE : type === "Proposal" ? AMBER : type === "Project" ? "#60a5fa" : type === "BD" ? "#34d399" : SLATE_DIM;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -1214,7 +1217,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
 
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "Type",     value: type,     onChange: setType,     options: ["Review","Proposal","Project","Task"], icon: <Tag size={11} /> },
+              { label: "Type",     value: type,     onChange: setType,     options: ["Review","Proposal","BD","Project","Task"], icon: <Tag size={11} /> },
               { label: "Priority", value: priority, onChange: setPriority, options: ["Urgent","High","Normal","Low"],       icon: <Zap size={11} /> },
             ].map(f => (
               <div key={f.label}>
@@ -1756,7 +1759,7 @@ export default function App() {
           {viewMode === "board" && (
             <>
               <div className="h-3 w-px bg-white/[0.08] mx-1" />
-              {[["all","All"],["Review","Reviews"],["Proposal","Proposals"],["Project","Projects"],["Task","Tasks"]].map(([k, l]) => (
+              {[["all","All"],["Review","Reviews"],["Proposal","Proposals"],["BD","BD"],["Project","Projects"],["Task","Tasks"]].map(([k, l]) => (
                 <button key={k} onClick={() => setFilter(k)}
                   className={`px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${filter === k ? "bg-white/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-white/[0.04]"}`}>
                   {l}

@@ -164,6 +164,7 @@
   .type-proposal { @apply bg-amber-500/10 text-amber-400 border-amber-500/20; }
   .type-project  { @apply bg-blue-500/10 text-blue-400 border-blue-500/20; }
   .type-task     { @apply bg-slate-500/10 text-slate-400 border-slate-500/20; }
+  .type-bd       { @apply bg-emerald-500/10 text-emerald-400 border-emerald-500/20; }
 
   /* Priority colours */
   .priority-urgent { color: hsl(5 80% 60%); }

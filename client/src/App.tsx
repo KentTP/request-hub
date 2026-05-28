@@ -993,7 +993,7 @@ function FocusBoardView({
 
 // ─── Insights Panel (always visible right column) ─────────────────────────────
 
-function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (item: Request) => void }) {
+function InsightsPanel({ items, workLogs, onOpenItem }: { items: Request[]; workLogs: WorkLog[]; onOpenItem: (item: Request) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   const days14 = useMemo(() => Array.from({ length: 14 }, (_, i) => {
@@ -1075,38 +1075,52 @@ function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (i
         ))}
       </div>
 
-      {/* ── Completion ring + Velocity ── */}
-      <div className="grid grid-cols-2 gap-1.5">
-        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex flex-col items-center gap-1">
-          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Done</span>
-          <div className="relative w-[56px] h-[56px]">
-            <PieChart width={56} height={56}>
-              <Pie data={[{v:compRate},{v:100-compRate}]} dataKey="v" cx={24} cy={24} innerRadius={18} outerRadius={26} startAngle={90} endAngle={-270} strokeWidth={0}>
-                <Cell fill={SENSE_BLUE} />
-                <Cell fill="hsl(222 15% 18%)" />
-              </Pie>
-            </PieChart>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-[12px] font-bold tabular" style={{ color: SENSE_BLUE }}>{compRate}%</span>
-            </div>
-          </div>
-          <span className="text-[9px] text-muted-foreground tabular">{doneAll}/{items.length}</span>
-        </div>
+      {/* ── Hours today + Hours this week ── */}
+      {(() => {
+        const todayKey = today.toISOString().split("T")[0];
+        const wkStart  = new Date(today); wkStart.setDate(wkStart.getDate() - wkStart.getDay() + (wkStart.getDay() === 0 ? -6 : 1)); // Mon
+        const wkKeys   = Array.from({ length: 7 }, (_, i) => { const d = new Date(wkStart); d.setDate(d.getDate() + i); return d.toISOString().split("T")[0]; });
 
-        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex flex-col justify-between">
-          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Velocity</span>
-          <div className="flex items-end gap-1 mt-1">
-            <span className={`text-2xl font-display font-bold tabular leading-none ${velocity > 0 ? "text-blue-400" : velocity < 0 ? "text-red-400" : "text-slate-400"}`}>
-              {velocity > 0 ? "+" : ""}{velocity}
-            </span>
-            <span className="text-[9px] text-muted-foreground mb-0.5">vs last wk</span>
+        const todayMins = workLogs.filter(l => l.log_date === todayKey).reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+        const weekMins  = workLogs.filter(l => wkKeys.includes(l.log_date)).reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+
+        const DAY_CAP  = 7.5 * 60;  // 450 mins
+        const WEEK_CAP = 37.5 * 60; // 2250 mins
+
+        const dayPct  = Math.min(100, Math.round((todayMins  / DAY_CAP)  * 100));
+        const weekPct = Math.min(100, Math.round((weekMins   / WEEK_CAP) * 100));
+
+        const dayHrs  = (todayMins / 60).toFixed(1);
+        const weekHrs = (weekMins  / 60).toFixed(1);
+
+        const dayColor  = dayPct  >= 100 ? "hsl(142 70% 45%)" : dayPct  >= 75 ? AMBER : SENSE_BLUE;
+        const weekColor = weekPct >= 100 ? "hsl(142 70% 45%)" : weekPct >= 75 ? AMBER : SENSE_BLUE;
+
+        const Ring = ({ pct, color, label, logged, cap }: { pct: number; color: string; label: string; logged: string; cap: string }) => (
+          <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex flex-col items-center gap-1">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground self-start">{label}</span>
+            <div className="relative w-[56px] h-[56px] my-0.5">
+              <PieChart width={56} height={56}>
+                <Pie data={[{v:pct},{v:100-pct}]} dataKey="v" cx={24} cy={24} innerRadius={18} outerRadius={26} startAngle={90} endAngle={-270} strokeWidth={0}>
+                  <Cell fill={color} />
+                  <Cell fill="hsl(222 15% 18%)" />
+                </Pie>
+              </PieChart>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-[11px] font-bold tabular" style={{ color }}>{pct}%</span>
+              </div>
+            </div>
+            <span className="text-[9px] text-muted-foreground tabular">{logged}h / {cap}h</span>
           </div>
-          <div className={`flex items-center gap-1 text-[9.5px] mt-1 ${velocity > 0 ? "text-blue-400" : velocity < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-            {velocity > 0 ? <TrendingUp size={10} /> : velocity < 0 ? <TrendingDown size={10} /> : <Minus size={10} />}
-            <span>{doneThisWeek} done</span>
+        );
+
+        return (
+          <div className="grid grid-cols-2 gap-1.5">
+            <Ring pct={dayPct}  color={dayColor}  label="Today"     logged={dayHrs}  cap="7.5"  />
+            <Ring pct={weekPct} color={weekColor} label="This Week"  logged={weekHrs} cap="37.5" />
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* ── 14-day sparkline ── */}
       <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
@@ -2479,7 +2493,7 @@ export default function App() {
               onOpenItem={item => setEditingItem(item)}
             />
           ) : (
-            <InsightsPanel items={items} onOpenItem={item => setEditingItem(item)} />
+            <InsightsPanel items={items} workLogs={workLogs} onOpenItem={item => setEditingItem(item)} />
           )}
         </aside>
       </div>

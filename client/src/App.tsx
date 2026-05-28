@@ -1173,24 +1173,6 @@ function InsightsPanel({ items, workLogs, onOpenItem }: { items: Request[]; work
         );
       })()}
 
-      {/* ── Type distribution ── */}
-      {typeData.length > 0 && (
-        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
-          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Type Breakdown</span>
-          <div className="h-[52px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={typeData} layout="vertical" margin={{ top: 0, right: 24, left: 0, bottom: 0 }}>
-                <XAxis type="number" hide />
-                <YAxis type="category" dataKey="name" width={48} tick={{ fontSize: 9.5, fill: "hsl(215 15% 58%)" }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 10 }} cursor={{ fill: "hsl(222 15% 20%)" }} />
-                <Bar dataKey="count" radius={[0, 3, 3, 0]} maxBarSize={9}>
-                  {typeData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
 
       {/* ── Top requesters ── */}
       {topPeople.length > 0 && (

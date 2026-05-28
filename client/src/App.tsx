@@ -1077,6 +1077,31 @@ function InsightsPanel({ items, workLogs, onOpenItem }: { items: Request[]; work
 
 
 
+      {/* ── Type donut: BD vs Proposal vs Review vs Project/Task ── */}
+      {typeData.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Type Mix</span>
+          <div className="flex items-center gap-3">
+            <PieChart width={64} height={64}>
+              <Pie data={typeData} dataKey="count" cx={28} cy={28} innerRadius={17} outerRadius={30} strokeWidth={0}>
+                {typeData.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Pie>
+              <Tooltip contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 10, padding: "3px 8px" }}
+                formatter={(v: number, n: string) => [v, n]} />
+            </PieChart>
+            <div className="flex flex-col gap-1 flex-1">
+              {typeData.map(d => (
+                <div key={d.name} className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-sm shrink-0" style={{ background: d.color }} />
+                  <span className="text-[10px] text-foreground flex-1">{d.name}</span>
+                  <span className="text-[10px] font-bold tabular text-muted-foreground">{d.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 14-day sparkline ── */}
       <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
         <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Activity · 14 days</span>
@@ -1419,6 +1444,31 @@ function TypeFocusPanel({
           )}
         </div>
       </div>
+
+      {/* ── Type donut: BD vs Proposal vs Review vs Project/Task ── */}
+      {typeData.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Type Mix</span>
+          <div className="flex items-center gap-3">
+            <PieChart width={64} height={64}>
+              <Pie data={typeData} dataKey="count" cx={28} cy={28} innerRadius={17} outerRadius={30} strokeWidth={0}>
+                {typeData.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Pie>
+              <Tooltip contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 10, padding: "3px 8px" }}
+                formatter={(v: number, n: string) => [v, n]} />
+            </PieChart>
+            <div className="flex flex-col gap-1 flex-1">
+              {typeData.map(d => (
+                <div key={d.name} className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-sm shrink-0" style={{ background: d.color }} />
+                  <span className="text-[10px] text-foreground flex-1">{d.name}</span>
+                  <span className="text-[10px] font-bold tabular text-muted-foreground">{d.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 14-day sparkline ── */}
       <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">

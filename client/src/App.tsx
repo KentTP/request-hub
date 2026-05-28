@@ -28,6 +28,7 @@ type Request = {
   notes: string | null;
   description: string | null;
   entry_date: string | null;   // user-editable "when did this happen" date
+  assignee: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -46,6 +47,7 @@ function rowToRequest(row: any): Request {
     notes: row.notes ?? null,
     description: row.description ?? null,
     entry_date: row.entry_date ?? null,
+    assignee: row.assignee ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at ?? null,
@@ -617,8 +619,14 @@ function RequestCard({ item, onMove, onDelete, onClick }: {
               <span className="text-[10.5px] text-muted-foreground">{item.person}</span>
             </div>
           )}
+          {item.assignee && (
+            <div className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded-full px-1.5 py-0.5">
+              <Avatar name={item.assignee} size={12} />
+              <span className="text-[9.5px] font-medium text-blue-300/80">{item.assignee}</span>
+            </div>
+          )}
           {dl && (
-            <div className={`flex items-center gap-1 text-[10px] font-medium ${!item.person ? "ml-auto" : ""} ${dl.cls}`}>
+            <div className={`flex items-center gap-1 text-[10px] font-medium ${!item.person && !item.assignee ? "ml-auto" : ""} ${dl.cls}`}>
               <Clock size={9} /><span>{dl.text}</span>
             </div>
           )}
@@ -1088,6 +1096,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
   const [priority,    setPriority]    = useState(item.priority);
   const [deadline,    setDeadline]    = useState(item.deadline || "");
   const [entryDate,   setEntryDate]   = useState(effectiveDate(item));
+  const [assignee,    setAssignee]    = useState(item.assignee || "");
   const [notes,       setNotes]       = useState(item.notes || "");
   const [status,      setStatus]      = useState(item.status);
 
@@ -1154,6 +1163,12 @@ function EditModal({ item, onClose, onSave, onDelete }: {
             </div>
 
             <div>
+              <label className="flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground mb-1"><User size={11} className="text-blue-400" />Assigned To</label>
+              <input value={assignee} onChange={e => setAssignee(e.target.value)} placeholder="Assignee name"
+                className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[12.5px] text-foreground placeholder:text-muted-foreground outline-none focus:border-blue-500/50" />
+            </div>
+
+            <div>
               <label className="flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground mb-1"><Calendar size={11} />Deadline</label>
               <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}
                 className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[12.5px] text-foreground outline-none focus:border-blue-500/50" />
@@ -1199,7 +1214,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
           <div className="flex-1" />
           <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[12.5px] text-muted-foreground hover:text-foreground hover:bg-white/[0.06] transition-colors">Cancel</button>
           <button onClick={() => {
-            onSave(item.id, { project_name: projectName.trim() || null, title: title.trim() || item.title, person: person.trim() || null, type, priority, deadline: deadline || null, entry_date: entryDate || null, notes, status });
+            onSave(item.id, { project_name: projectName.trim() || null, title: title.trim() || item.title, person: person.trim() || null, type, priority, deadline: deadline || null, entry_date: entryDate || null, notes, status, assignee: assignee.trim() || null });
             onClose();
           }} className="px-4 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-[12.5px] font-semibold text-white transition-colors flex items-center gap-1.5">
             Save <ArrowRight size={12} />
@@ -1551,6 +1566,7 @@ export default function App() {
       type: data.type, priority: data.priority, deadline: data.deadline,
       status: data.status, notes: data.notes || "", description: data.description || "",
       entry_date: data.entry_date || todayIso,
+      assignee: data.assignee || null,
     }]);
     setLoading(false);
     if (error) { showToast("Failed to add", "error"); return; }

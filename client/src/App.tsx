@@ -790,9 +790,14 @@ function FocusBoardView({
 
   // Projects that belong to this type
   const filtered = items.filter(i => i.type === filter);
-  const typeProjects = new Set(filtered.map(i => i.project_name).filter(Boolean) as string[]);
+  // For Proposal/BD: the title IS the unique name; project_name is just "RFP"/"BD"
+  const isNamedByTitle = filter === "Proposal" || filter === "BD";
+  const typeProjects = new Set(
+    filtered.map(i => isNamedByTitle ? i.title : i.project_name).filter(Boolean) as string[]
+  );
 
   // Work logs that belong to projects of this type
+  // For Proposal/BD, logs are keyed by title (stored as project_name in work_logs)
   const typeLogs = workLogs.filter(l => typeProjects.has(l.project_name));
   const totalLogMins = typeLogs.reduce((s, l) => s + (l.duration_mins ?? 0), 0);
 
@@ -827,7 +832,7 @@ function FocusBoardView({
       {/* ── Left: stacked buckets ── */}
       <div className="w-[200px] shrink-0 flex flex-col gap-1 p-3 border-r border-white/[0.06]">
         {BUCKETS.map((b, idx) => {
-          const count = b.status === "logs" ? typeLogs.length : filtered.filter(i => i.status === b.status).length;
+          const count = b.status === "logs" ? typeLogs.length : filteredForBuckets.filter(i => i.status === b.status).length;
           const isActive = activeBucket === b.status;
           // Divider before Work Logs
           return (
@@ -854,11 +859,11 @@ function FocusBoardView({
           <div className="flex flex-col gap-1.5 px-1">
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Total tasks</span>
-              <span className="font-bold text-foreground">{filtered.length}</span>
+              <span className="font-bold text-foreground">{filteredForBuckets.length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Active</span>
-              <span className="font-bold" style={{ color: SENSE_BLUE }}>{filtered.filter(i => i.status !== "done").length}</span>
+              <span className="font-bold" style={{ color: SENSE_BLUE }}>{filteredForBuckets.filter(i => i.status !== "done").length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Log entries</span>
@@ -1735,11 +1740,13 @@ function EditModal({ item, onClose, onSave, onDelete }: {
               placeholder="e.g. NMB Tower, Boulder Bay"
               className="w-full bg-transparent text-[13px] font-semibold text-foreground placeholder:text-muted-foreground/50 border-0 border-b border-white/[0.08] pb-1.5 outline-none focus:border-blue-500/50 transition-colors" />
           </div>
-          {/* Task */}
+          {/* Task / Name */}
           <div>
-            <label className="text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">Task</label>
+            <label className="text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+              {(type === "Proposal" || type === "BD") ? "Name" : "Task"}
+            </label>
             <input value={title} onChange={e => setTitle(e.target.value)}
-              placeholder="Task description"
+              placeholder={(type === "Proposal" || type === "BD") ? "e.g. Devonshire I+II Phase II, Kelowna Pursuit" : "Task description"}
               className="w-full bg-transparent text-[14px] font-medium text-foreground placeholder:text-muted-foreground/50 border-0 border-b border-white/[0.08] pb-1.5 outline-none focus:border-blue-500/50 transition-colors"
               autoFocus />
           </div>
@@ -2387,7 +2394,15 @@ export default function App() {
                     workLogs={workLogs}
                     onMove={handleMove}
                     onDelete={handleDelete}
-                    onOpenItem={item => item.project_name ? setProjectModal(item.project_name) : setEditingItem(item)}
+                    onOpenItem={item => {
+                      if ((item.type === "Proposal" || item.type === "BD") && item.title) {
+                        setProjectModal(item.title);
+                      } else if (item.project_name) {
+                        setProjectModal(item.project_name);
+                      } else {
+                        setEditingItem(item);
+                      }
+                    }}
                     onOpenProject={name => setProjectModal(name)}
                   />
                 </div>

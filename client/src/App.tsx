@@ -775,23 +775,48 @@ function Column({ status, label, items, onMove, onDelete, onClick, icon, accentC
 // ─── Focus Board View ───────────────────────────────────────────────────────
 
 function FocusBoardView({
-  filter, items, onMove, onDelete, onOpenItem,
+  filter, items, workLogs, onMove, onDelete, onOpenItem, onOpenProject,
 }: {
   filter: string;
   items: Request[];
+  workLogs: WorkLog[];
   onMove: (id: string, status: string) => void;
   onDelete: (id: string) => void;
   onOpenItem: (item: Request) => void;
+  onOpenProject: (name: string) => void;
 }) {
   const [activeBucket, setActiveBucket] = useState<string>("in-progress");
+  const formatMins = (m: number) => m >= 60 ? `${Math.floor(m / 60)}h${m % 60 > 0 ? ` ${m % 60}m` : ""}` : `${m}m`;
+
+  // Projects that belong to this type
+  const filtered = items.filter(i => i.type === filter);
+  const typeProjects = new Set(filtered.map(i => i.project_name).filter(Boolean) as string[]);
+
+  // Work logs that belong to projects of this type
+  const typeLogs = workLogs.filter(l => typeProjects.has(l.project_name));
+  const totalLogMins = typeLogs.reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+
+  // Sorted logs: newest first
+  const sortedLogs = [...typeLogs].sort((a, b) => b.log_date.localeCompare(a.log_date));
+
+  // Group logs by date for display
+  const logsByDate = useMemo(() => {
+    const groups: Record<string, WorkLog[]> = {};
+    sortedLogs.forEach(l => {
+      if (!groups[l.log_date]) groups[l.log_date] = [];
+      groups[l.log_date].push(l);
+    });
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [sortedLogs]);
 
   const BUCKETS = [
     { status: "inbox",       label: "Inbox",       icon: <Clock size={13} />,        color: SENSE_BLUE },
     { status: "in-progress", label: "In Progress",  icon: <Zap size={13} />,          color: AMBER },
     { status: "done",        label: "Done",         icon: <CheckCircle2 size={13} />, color: "hsl(142 70% 45%)" },
+    { status: "logs",        label: "Work Logs",    icon: <FileText size={13} />,     color: "hsl(38 92% 55%)" },
   ];
 
-  const filtered = items.filter(i => i.type === filter);
+  const isLogsActive = activeBucket === "logs";
   const bucketItems = filtered.filter(i => i.status === activeBucket);
   const sorted = [...bucketItems].sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
   const activeBucketCfg = BUCKETS.find(b => b.status === activeBucket)!;
@@ -800,31 +825,35 @@ function FocusBoardView({
     <div className="flex h-full overflow-hidden">
 
       {/* ── Left: stacked buckets ── */}
-      <div className="w-[200px] shrink-0 flex flex-col gap-1.5 p-3 border-r border-white/[0.06]">
-        {BUCKETS.map(b => {
-          const count = filtered.filter(i => i.status === b.status).length;
+      <div className="w-[200px] shrink-0 flex flex-col gap-1 p-3 border-r border-white/[0.06]">
+        {BUCKETS.map((b, idx) => {
+          const count = b.status === "logs" ? typeLogs.length : filtered.filter(i => i.status === b.status).length;
           const isActive = activeBucket === b.status;
+          // Divider before Work Logs
           return (
-            <button key={b.status} onClick={() => setActiveBucket(b.status)}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all ${
-                isActive
-                  ? "bg-white/[0.08] border border-white/[0.12]"
-                  : "hover:bg-white/[0.04] border border-transparent"
-              }`}>
-              <span style={{ color: isActive ? b.color : "hsl(215 15% 50%)" }}>{b.icon}</span>
-              <span className={`text-[11.5px] font-semibold flex-1 ${
-                isActive ? "text-foreground" : "text-muted-foreground"
-              }`}>{b.label}</span>
-              <span className="text-[10px] font-bold tabular px-1.5 py-0.5 rounded-md bg-white/[0.05] text-muted-foreground"
-                style={isActive ? { color: b.color } : {}}>{count}</span>
-            </button>
+            <div key={b.status}>
+              {idx === 3 && <div className="my-1.5 border-t border-white/[0.06]" />}
+              <button onClick={() => setActiveBucket(b.status)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all ${
+                  isActive
+                    ? "bg-white/[0.08] border border-white/[0.12]"
+                    : "hover:bg-white/[0.04] border border-transparent"
+                }`}>
+                <span style={{ color: isActive ? b.color : "hsl(215 15% 50%)" }}>{b.icon}</span>
+                <span className={`text-[11.5px] font-semibold flex-1 ${
+                  isActive ? "text-foreground" : "text-muted-foreground"
+                }`}>{b.label}</span>
+                <span className="text-[10px] font-bold tabular px-1.5 py-0.5 rounded-md bg-white/[0.05] text-muted-foreground"
+                  style={isActive ? { color: b.color } : {}}>{count}</span>
+              </button>
+            </div>
           );
         })}
 
         <div className="mt-auto pt-3 border-t border-white/[0.06]">
           <div className="flex flex-col gap-1.5 px-1">
             <div className="flex justify-between text-[10px]">
-              <span className="text-muted-foreground">Total</span>
+              <span className="text-muted-foreground">Total tasks</span>
               <span className="font-bold text-foreground">{filtered.length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
@@ -832,43 +861,126 @@ function FocusBoardView({
               <span className="font-bold" style={{ color: SENSE_BLUE }}>{filtered.filter(i => i.status !== "done").length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
-              <span className="text-muted-foreground">Done</span>
-              <span className="font-bold" style={{ color: "hsl(142 70% 45%)" }}>{filtered.filter(i => i.status === "done").length}</span>
+              <span className="text-muted-foreground">Log entries</span>
+              <span className="font-bold" style={{ color: AMBER }}>{typeLogs.length}</span>
             </div>
+            {totalLogMins > 0 && (
+              <div className="flex justify-between text-[10px]">
+                <span className="text-muted-foreground">Time logged</span>
+                <span className="font-bold" style={{ color: AMBER }}>{formatMins(totalLogMins)}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ── Right: expanded task list ── */}
+      {/* ── Right: task list OR work logs ── */}
       <div className="flex-1 overflow-y-auto styled-scroll p-4 min-w-0">
         <div className="flex items-center gap-2 mb-3">
           <span style={{ color: activeBucketCfg.color }}>{activeBucketCfg.icon}</span>
           <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{activeBucketCfg.label}</span>
-          <span className="text-[10px] text-muted-foreground/60 ml-1">{sorted.length} item{sorted.length !== 1 ? "s" : ""}</span>
+          {isLogsActive ? (
+            <>
+              <span className="text-[10px] text-muted-foreground/60 ml-1">{typeLogs.length} entr{typeLogs.length !== 1 ? "ies" : "y"}</span>
+              {totalLogMins > 0 && (
+                <span className="ml-auto text-[10px] font-semibold flex items-center gap-1" style={{ color: AMBER }}>
+                  <Timer size={10} />{formatMins(totalLogMins)} total
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-[10px] text-muted-foreground/60 ml-1">{sorted.length} item{sorted.length !== 1 ? "s" : ""}</span>
+          )}
         </div>
 
-        <AnimatePresence mode="popLayout">
-          {sorted.length === 0 ? (
-            <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center py-20 gap-2 text-center">
-              <div className="w-10 h-10 rounded-full bg-white/[0.04] flex items-center justify-center">
-                <span style={{ color: activeBucketCfg.color, opacity: 0.35 }}>{activeBucketCfg.icon}</span>
+        {isLogsActive ? (
+          // ── Work Logs view ──
+          <AnimatePresence mode="popLayout">
+            {logsByDate.length === 0 ? (
+              <motion.div key="empty-logs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex flex-col items-center justify-center py-20 gap-2 text-center">
+                <div className="w-10 h-10 rounded-full bg-white/[0.04] flex items-center justify-center">
+                  <FileText size={16} style={{ color: AMBER, opacity: 0.35 }} />
+                </div>
+                <p className="text-[12px] text-muted-foreground/50">No work logs yet for this type</p>
+                <p className="text-[10.5px] text-muted-foreground/40">Open a project card to add logs</p>
+              </motion.div>
+            ) : (
+              <div className="flex flex-col gap-4 max-w-2xl">
+                {logsByDate.map(([date, logs]) => {
+                  const dayMins = logs.reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+                  const dayLabel = (() => {
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const d = new Date(date + "T00:00:00");
+                    const diff = Math.round((today.getTime() - d.getTime()) / 86400000);
+                    if (diff === 0) return "Today";
+                    if (diff === 1) return "Yesterday";
+                    return d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
+                  })();
+                  return (
+                    <motion.div key={date} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+                      {/* Date header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{dayLabel}</span>
+                        <div className="flex-1 h-px bg-white/[0.05]" />
+                        {dayMins > 0 && (
+                          <span className="text-[9.5px] font-semibold flex items-center gap-1" style={{ color: AMBER }}>
+                            <Timer size={9} />{formatMins(dayMins)}
+                          </span>
+                        )}
+                      </div>
+                      {/* Log entries for this day */}
+                      <div className="flex flex-col gap-1.5">
+                        {logs.map(log => (
+                          <div key={log.id}
+                            className="flex items-start gap-3 px-3 py-2.5 rounded-lg bg-[hsl(222_18%_11%)] border border-white/[0.06] hover:border-white/[0.1] transition-colors group">
+                            <FileText size={12} style={{ color: AMBER }} className="shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[11.5px] text-foreground leading-snug">{log.description}</p>
+                              <button onClick={() => onOpenProject(log.project_name)}
+                                className="text-[10px] text-muted-foreground/60 hover:text-blue-400 transition-colors mt-0.5 truncate max-w-full text-left">
+                                {log.project_name}
+                              </button>
+                            </div>
+                            {log.duration_mins != null && log.duration_mins > 0 && (
+                              <span className="text-[10px] font-semibold shrink-0 flex items-center gap-1 mt-0.5" style={{ color: AMBER }}>
+                                <Timer size={9} />{formatMins(log.duration_mins)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
-              <p className="text-[12px] text-muted-foreground/50">Nothing here</p>
-            </motion.div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 max-w-2xl">
-              {sorted.map(item => (
-                <motion.div key={item.id}
-                  initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.15 }}
-                  draggable onDragStart={e => e.dataTransfer.setData("id", item.id)}>
-                  <RequestCard item={item} onMove={onMove} onDelete={onDelete} onClick={i => onOpenItem(i)} />
-                </motion.div>
-              ))}
-            </div>
-          )}
-        </AnimatePresence>
+            )}
+          </AnimatePresence>
+        ) : (
+          // ── Task list view ──
+          <AnimatePresence mode="popLayout">
+            {sorted.length === 0 ? (
+              <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex flex-col items-center justify-center py-20 gap-2 text-center">
+                <div className="w-10 h-10 rounded-full bg-white/[0.04] flex items-center justify-center">
+                  <span style={{ color: activeBucketCfg.color, opacity: 0.35 }}>{activeBucketCfg.icon}</span>
+                </div>
+                <p className="text-[12px] text-muted-foreground/50">Nothing here</p>
+              </motion.div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 max-w-2xl">
+                {sorted.map(item => (
+                  <motion.div key={item.id}
+                    initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.15 }}
+                    draggable onDragStart={e => e.dataTransfer.setData("id", item.id)}>
+                    <RequestCard item={item} onMove={onMove} onDelete={onDelete} onClick={i => onOpenItem(i)} />
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </AnimatePresence>
+        )}
       </div>
     </div>
   );
@@ -2272,9 +2384,11 @@ export default function App() {
                   <FocusBoardView
                     filter={filter}
                     items={items}
+                    workLogs={workLogs}
                     onMove={handleMove}
                     onDelete={handleDelete}
                     onOpenItem={item => item.project_name ? setProjectModal(item.project_name) : setEditingItem(item)}
+                    onOpenProject={name => setProjectModal(name)}
                   />
                 </div>
               ) : (

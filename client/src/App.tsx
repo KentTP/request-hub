@@ -12,7 +12,7 @@ import {
   TrendingUp, TrendingDown, Minus, Calendar,
   User, Tag, ChevronDown, RefreshCw, Target, CalendarDays,
   Layers, GitMerge, Lightbulb, BarChart3,
-  Plus, FileText, Timer, BookOpen, FolderOpen,
+  Plus, FileText, Timer, BookOpen, FolderOpen, Search,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────

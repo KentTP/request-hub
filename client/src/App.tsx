@@ -832,7 +832,7 @@ function FocusBoardView({
       {/* ── Left: stacked buckets ── */}
       <div className="w-[200px] shrink-0 flex flex-col gap-1 p-3 border-r border-white/[0.06]">
         {BUCKETS.map((b, idx) => {
-          const count = b.status === "logs" ? typeLogs.length : filteredForBuckets.filter(i => i.status === b.status).length;
+          const count = b.status === "logs" ? typeLogs.length : filtered.filter(i => i.status === b.status).length;
           const isActive = activeBucket === b.status;
           // Divider before Work Logs
           return (
@@ -859,11 +859,11 @@ function FocusBoardView({
           <div className="flex flex-col gap-1.5 px-1">
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Total tasks</span>
-              <span className="font-bold text-foreground">{filteredForBuckets.length}</span>
+              <span className="font-bold text-foreground">{filtered.length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Active</span>
-              <span className="font-bold" style={{ color: SENSE_BLUE }}>{filteredForBuckets.filter(i => i.status !== "done").length}</span>
+              <span className="font-bold" style={{ color: SENSE_BLUE }}>{filtered.filter(i => i.status !== "done").length}</span>
             </div>
             <div className="flex justify-between text-[10px]">
               <span className="text-muted-foreground">Log entries</span>

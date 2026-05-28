@@ -1303,7 +1303,7 @@ function EditModal({ item, onClose, onSave, onDelete }: {
 
 // ─── Project Modal ──────────────────────────────────────────────────────────
 
-function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAddLog, onDeleteLog }: {
+function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAddLog, onDeleteLog, onEditLog }: {
   projectName: string;
   items: Request[];
   workLogs: WorkLog[];
@@ -1311,12 +1311,17 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
   onOpenItem: (item: Request) => void;
   onAddLog: (projectName: string, description: string, logDate: string, durationMins?: number) => Promise<void>;
   onDeleteLog: (id: string) => Promise<void>;
+  onEditLog: (id: string, description: string, logDate: string, durationMins?: number) => Promise<void>;
 }) {
   const [tab, setTab] = useState<"logs" | "tasks">("logs");
-  const [logText, setLogText]       = useState("");
-  const [logDate, setLogDate]       = useState(new Date().toISOString().split("T")[0]);
+  const [logText, setLogText]         = useState("");
+  const [logDate, setLogDate]         = useState(new Date().toISOString().split("T")[0]);
   const [logDuration, setLogDuration] = useState("");
   const [submitting, setSubmitting]   = useState(false);
+  const [editingLogId, setEditingLogId]       = useState<string | null>(null);
+  const [editLogText, setEditLogText]         = useState("");
+  const [editLogDate, setEditLogDate]         = useState("");
+  const [editLogDuration, setEditLogDuration] = useState("");
 
   const projItems = items.filter(i => i.project_name?.toLowerCase() === projectName.toLowerCase());
   const projLogs  = workLogs.filter(l => l.project_name.toLowerCase() === projectName.toLowerCase())
@@ -1464,21 +1469,55 @@ function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAdd
                         </div>
                         <div className="flex flex-col gap-1.5 ml-1">
                           {dayLogs.map(log => (
-                            <div key={log.id} className="group flex items-start gap-2.5 rounded-lg px-3 py-2 bg-[hsl(222_18%_11%)] hover:bg-[hsl(222_18%_13%)] transition-colors">
-                              <div className="w-1 h-1 rounded-full mt-1.5 shrink-0" style={{ background: accentColor }} />
-                              <p className="flex-1 text-[12px] text-foreground/85 leading-relaxed">{log.description}</p>
-                              <div className="flex items-center gap-2 shrink-0">
-                                {log.duration_mins && (
-                                  <span className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
-                                    <Timer size={9} />{formatMins(log.duration_mins)}
-                                  </span>
-                                )}
-                                <button onClick={() => onDeleteLog(log.id)}
-                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-red-400/60 hover:text-red-400 transition-all">
-                                  <Trash2 size={10} />
-                                </button>
+                            editingLogId === log.id ? (
+                              /* ── Inline edit mode ── */
+                              <div key={log.id} className="rounded-lg px-3 py-2.5 bg-[hsl(222_18%_13%)] border border-blue-500/30 flex flex-col gap-2">
+                                <textarea value={editLogText} onChange={e => setEditLogText(e.target.value)}
+                                  rows={2} autoFocus
+                                  className="w-full bg-[hsl(222_18%_10%)] border border-white/[0.08] rounded px-2 py-1.5 text-[12px] text-foreground outline-none resize-none focus:border-blue-500/40 transition-colors" />
+                                <div className="flex items-center gap-2">
+                                  <input type="date" value={editLogDate} onChange={e => setEditLogDate(e.target.value)}
+                                    className="bg-[hsl(222_18%_10%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
+                                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                    <Timer size={10} />
+                                    <input type="number" value={editLogDuration} onChange={e => setEditLogDuration(e.target.value)}
+                                      placeholder="mins" min={1} max={999}
+                                      className="w-14 bg-[hsl(222_18%_10%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
+                                  </div>
+                                  <div className="ml-auto flex items-center gap-1.5">
+                                    <button onClick={() => setEditingLogId(null)}
+                                      className="px-2 py-1 rounded text-[10.5px] text-muted-foreground hover:text-foreground hover:bg-white/[0.06] transition-colors">Cancel</button>
+                                    <button onClick={async () => {
+                                      const desc = editLogText.trim();
+                                      if (!desc) return;
+                                      const mins = editLogDuration ? parseInt(editLogDuration, 10) || undefined : undefined;
+                                      await onEditLog(log.id, desc, editLogDate, mins);
+                                      setEditingLogId(null);
+                                    }}
+                                      className="px-2.5 py-1 rounded text-[10.5px] font-semibold text-white transition-colors"
+                                      style={{ background: accentColor }}>Save</button>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              /* ── View mode ── */
+                              <div key={log.id} className="group flex items-start gap-2.5 rounded-lg px-3 py-2 bg-[hsl(222_18%_11%)] hover:bg-[hsl(222_18%_13%)] transition-colors cursor-pointer"
+                                onClick={() => { setEditingLogId(log.id); setEditLogText(log.description); setEditLogDate(log.log_date); setEditLogDuration(log.duration_mins ? String(log.duration_mins) : ""); }}>
+                                <div className="w-1 h-1 rounded-full mt-1.5 shrink-0" style={{ background: accentColor }} />
+                                <p className="flex-1 text-[12px] text-foreground/85 leading-relaxed">{log.description}</p>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {log.duration_mins != null && log.duration_mins > 0 && (
+                                    <span className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+                                      <Timer size={9} />{formatMins(log.duration_mins)}
+                                    </span>
+                                  )}
+                                  <button onClick={e => { e.stopPropagation(); onDeleteLog(log.id); }}
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-red-400/60 hover:text-red-400 transition-all">
+                                    <Trash2 size={10} />
+                                  </button>
+                                </div>
+                              </div>
+                            )
                           ))}
                         </div>
                       </div>
@@ -1686,6 +1725,15 @@ export default function App() {
     fetchWorkLogs();
   }, [fetchWorkLogs]);
 
+  const updateWorkLog = useCallback(async (id: string, description: string, logDate: string, durationMins?: number) => {
+    await supabase.from("work_logs").update({
+      description,
+      log_date: logDate,
+      duration_mins: durationMins ?? null,
+    }).eq("id", id);
+    fetchWorkLogs();
+  }, [fetchWorkLogs]);
+
   const handleInput = useCallback((text: string) => {
     // Status commands
     if (/^(?:done|finish|complete)\s/i.test(text)) {
@@ -1866,6 +1914,7 @@ export default function App() {
             onOpenItem={item => { setProjectModal(null); setEditingItem(item); }}
             onAddLog={addWorkLog}
             onDeleteLog={deleteWorkLog}
+            onEditLog={updateWorkLog}
           />
         )}
       </AnimatePresence>

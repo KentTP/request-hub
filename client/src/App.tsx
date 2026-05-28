@@ -339,6 +339,7 @@ function cleanTitle(text: string, person: string | null): string {
 const GENERIC_PROJECT_TRIGGERS = new Set([
   "rfp", "rfi", "rfq", "tender", "eia", "eia review", "proposal",
   "bid", "quote", "review", "task", "misc", "general",
+  "bd", "business dev", "business development",
 ]);
 
 function isGenericProjectName(name: string): boolean {

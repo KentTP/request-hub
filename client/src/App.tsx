@@ -11,6 +11,7 @@ import {
   TrendingUp, TrendingDown, Minus, Calendar,
   User, Tag, ChevronDown, RefreshCw, Target, CalendarDays,
   Layers, GitMerge, Lightbulb, BarChart3,
+  Plus, FileText, Timer, BookOpen, FolderOpen,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -54,6 +55,28 @@ function rowToRequest(row: any): Request {
 // Effective date: entry_date if set, otherwise fall back to created_at date
 function effectiveDate(item: Request): string {
   return item.entry_date ?? item.created_at.split("T")[0];
+}
+
+// ─── Work Log type ──────────────────────────────────────────────────────────
+
+type WorkLog = {
+  id: string;
+  project_name: string;
+  log_date: string;        // YYYY-MM-DD
+  description: string;
+  duration_mins: number | null;
+  created_at: string;
+};
+
+function rowToWorkLog(row: any): WorkLog {
+  return {
+    id: row.id,
+    project_name: row.project_name,
+    log_date: row.log_date,
+    description: row.description,
+    duration_mins: row.duration_mins ?? null,
+    created_at: row.created_at,
+  };
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -901,26 +924,36 @@ function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (i
 
 // ─── Weekly Review ────────────────────────────────────────────────────────────
 
-function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (item: Request) => void }) {
+function WeeklyReview({ items, workLogs, onOpenItem, onOpenProject }: {
+  items: Request[];
+  workLogs: WorkLog[];
+  onOpenItem: (item: Request) => void;
+  onOpenProject: (projectName: string) => void;
+}) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
+  const formatMins = (m: number) => m >= 60 ? `${Math.floor(m / 60)}h${m % 60 > 0 ? ` ${m % 60}m` : ""}` : `${m}m`;
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
     const d = new Date(today); d.setDate(d.getDate() - (6 - i));
     const key = d.toISOString().split("T")[0];
     const isToday = i === 6;
+    const dayLogs = workLogs.filter(l => l.log_date === key);
     return {
       key, d, isToday,
       added:     items.filter(x => effectiveDate(x) === key),
       completed: items.filter(x => x.completed_at?.startsWith(key)),
       updated:   items.filter(x => x.updated_at?.startsWith(key) && effectiveDate(x) !== key && !x.completed_at?.startsWith(key)),
+      logs:      dayLogs,
+      logMins:   dayLogs.reduce((s, l) => s + (l.duration_mins ?? 0), 0),
       label: isToday ? "Today" : d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }),
     };
-  }), [items]);
+  }), [items, workLogs]);
 
   const weekAdded     = days.reduce((s, d) => s + d.added.length, 0);
   const weekCompleted = days.reduce((s, d) => s + d.completed.length, 0);
-  const busiest       = [...days].sort((a, b) => (b.added.length + b.completed.length) - (a.added.length + a.completed.length))[0];
+  const busiest       = [...days].sort((a, b) => (b.added.length + b.completed.length + b.logs.length) - (a.added.length + a.completed.length + a.logs.length))[0];
   const activePeople  = new Set(items.flatMap(i => i.person ? [i.person] : [])).size;
+  const totalLogMins  = days.reduce((s, d) => s + d.logMins, 0);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -936,7 +969,7 @@ function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (it
           {[
             { label: "Added",     value: weekAdded,       color: SENSE_BLUE },
             { label: "Completed", value: weekCompleted,   color: "#4ade80" },
-            { label: "Busiest",   value: busiest.label.split(",")[0], color: AMBER },
+            { label: "Logged",    value: totalLogMins > 0 ? formatMins(totalLogMins) : workLogs.length > 0 ? `${workLogs.length}` : "—", color: AMBER },
             { label: "People",    value: activePeople,    color: "#a78bfa" },
           ].map(s => (
             <div key={s.label} className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_11%)] px-3 py-2">
@@ -950,29 +983,29 @@ function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (it
       <div className="flex-1 overflow-y-auto styled-scroll px-5 py-3 flex flex-col gap-2.5">
         {[...days].reverse().map(day => {
           const total = day.added.length + day.completed.length + day.updated.length;
-          // PA-style day narrative
+          const hasActivity = total > 0 || day.logs.length > 0;
           const dayNarrative = (() => {
-            if (total === 0) return null;
             const parts: string[] = [];
-            const projects = new Set([...day.added, ...day.completed].map(i => i.project_name).filter(Boolean));
-            if (day.added.length > 0) parts.push(`${day.added.length} logged`);
+            const taskProjects = new Set([...day.added, ...day.completed].map(i => i.project_name).filter(Boolean) as string[]);
+            const logProjects  = new Set(day.logs.map(l => l.project_name));
+            const allProjects  = new Set([...taskProjects, ...logProjects]);
+            if (day.added.length > 0) parts.push(`${day.added.length} task${day.added.length > 1 ? "s" : ""} logged`);
             if (day.completed.length > 0) parts.push(`${day.completed.length} closed out`);
-            if (projects.size > 0) parts.push(`across ${[...projects].slice(0, 2).join(", ")}${projects.size > 2 ? " +more" : ""}`);
-            const types = [...new Set([...day.added, ...day.completed].map(i => i.type))];
-            if (types.length === 1) parts.push(`(${types[0].toLowerCase()}s only)`);
-            return parts.join(" — ");
+            if (day.logs.length > 0) parts.push(`${day.logs.length} work log${day.logs.length > 1 ? "s" : ""}${day.logMins > 0 ? ` (${formatMins(day.logMins)})` : ""}`);
+            if (allProjects.size > 0) parts.push(`on ${[...allProjects].slice(0, 2).join(", ")}${allProjects.size > 2 ? " +more" : ""}`);
+            return parts.length > 0 ? parts.join(" · ") : null;
           })();
           return (
             <div key={day.key} className={`rounded-xl border ${day.isToday ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-white/[0.06] bg-[hsl(222_18%_10%)]"}`}>
               <div className="px-4 py-2.5 border-b border-white/[0.05]">
                 <div className="flex items-center gap-2">
                   <span className={`text-[11.5px] font-bold ${day.isToday ? "text-blue-300" : "text-foreground"}`}>{day.label}</span>
-                  {total === 0 && <span className="text-[10px] text-muted-foreground/40 ml-1">— quiet day</span>}
-                  {total > 0 && (
+                  {!hasActivity && <span className="text-[10px] text-muted-foreground/40 ml-1">— quiet day</span>}
+                  {hasActivity && (
                     <div className="ml-auto flex items-center gap-2">
-                      {day.added.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-blue-400 font-semibold">+{day.added.length}</span> logged</span>}
+                      {day.added.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-blue-400 font-semibold">+{day.added.length}</span> tasks</span>}
                       {day.completed.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="text-green-400 font-semibold">✓{day.completed.length}</span> done</span>}
-                      {day.updated.length > 0 && <span className="text-[10px] text-muted-foreground/50">{day.updated.length} updated</span>}
+                      {day.logs.length > 0 && <span className="text-[10px] text-muted-foreground"><span className="font-semibold" style={{ color: AMBER }}>{day.logs.length}</span> log{day.logMins > 0 ? ` · ${formatMins(day.logMins)}` : ""}</span>}
                     </div>
                   )}
                 </div>
@@ -980,8 +1013,23 @@ function WeeklyReview({ items, onOpenItem }: { items: Request[]; onOpenItem: (it
                   <p className="text-[10px] text-muted-foreground/60 mt-0.5 leading-relaxed">{dayNarrative}</p>
                 )}
               </div>
-              {total > 0 && (
+              {hasActivity && (
                 <div className="px-4 py-2 flex flex-col gap-1">
+                  {day.logs.map(log => (
+                    <button key={`l-${log.id}`} onClick={() => onOpenProject(log.project_name)}
+                      className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1.5 py-1 transition-colors w-full group">
+                      <FileText size={9} style={{ color: AMBER }} className="shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[9px] font-bold uppercase tracking-wider truncate" style={{ color: avatarColor(log.project_name) }}>{log.project_name}</div>
+                        <div className="text-[11px] text-foreground/75 truncate">{log.description}</div>
+                      </div>
+                      {log.duration_mins != null && log.duration_mins > 0 && (
+                        <span className="text-[9.5px] text-muted-foreground/50 flex items-center gap-0.5 shrink-0">
+                          <Timer size={8} />{formatMins(log.duration_mins)}
+                        </span>
+                      )}
+                    </button>
+                  ))}
                   {day.completed.map(item => (
                     <button key={`d-${item.id}`} onClick={() => onOpenItem(item)}
                       className="flex items-center gap-2 text-left hover:bg-white/[0.04] rounded px-1.5 py-1 transition-colors w-full group">
@@ -1162,6 +1210,249 @@ function EditModal({ item, onClose, onSave, onDelete }: {
   );
 }
 
+// ─── Project Modal ──────────────────────────────────────────────────────────
+
+function ProjectModal({ projectName, items, workLogs, onClose, onOpenItem, onAddLog, onDeleteLog }: {
+  projectName: string;
+  items: Request[];
+  workLogs: WorkLog[];
+  onClose: () => void;
+  onOpenItem: (item: Request) => void;
+  onAddLog: (projectName: string, description: string, logDate: string, durationMins?: number) => Promise<void>;
+  onDeleteLog: (id: string) => Promise<void>;
+}) {
+  const [tab, setTab] = useState<"logs" | "tasks">("logs");
+  const [logText, setLogText]       = useState("");
+  const [logDate, setLogDate]       = useState(new Date().toISOString().split("T")[0]);
+  const [logDuration, setLogDuration] = useState("");
+  const [submitting, setSubmitting]   = useState(false);
+
+  const projItems = items.filter(i => i.project_name?.toLowerCase() === projectName.toLowerCase());
+  const projLogs  = workLogs.filter(l => l.project_name.toLowerCase() === projectName.toLowerCase())
+    .sort((a, b) => b.log_date.localeCompare(a.log_date));
+
+  const openItems      = projItems.filter(i => i.status !== "done");
+  const completedItems = projItems.filter(i => i.status === "done");
+  const activeDays     = new Set(projLogs.map(l => l.log_date)).size;
+  const totalMins      = projLogs.reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+  const accentColor    = avatarColor(projectName);
+
+  // Group logs by date
+  const logsByDate: Record<string, WorkLog[]> = {};
+  for (const log of projLogs) {
+    if (!logsByDate[log.log_date]) logsByDate[log.log_date] = [];
+    logsByDate[log.log_date].push(log);
+  }
+  const sortedDates = Object.keys(logsByDate).sort((a, b) => b.localeCompare(a));
+
+  const handleAddLog = async () => {
+    const desc = logText.trim();
+    if (!desc) return;
+    setSubmitting(true);
+    const mins = logDuration ? parseInt(logDuration, 10) || undefined : undefined;
+    await onAddLog(projectName, desc, logDate, mins);
+    setLogText(""); setLogDuration(""); setLogDate(new Date().toISOString().split("T")[0]);
+    setSubmitting(false);
+  };
+
+  const formatMins = (m: number) => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60 > 0 ? m % 60 + "m" : ""}`.trim() : `${m}m`;
+
+  return (
+    <motion.div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <motion.div className="relative w-full max-w-2xl bg-[hsl(222_20%_9%)] border border-white/[0.1] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+        initial={{ opacity: 0, y: -20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 10, scale: 0.96 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+        onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-start gap-3 px-5 py-4 border-b border-white/[0.08] shrink-0"
+          style={{ borderTopColor: accentColor, borderTopWidth: 3 }}>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: accentColor + "22" }}>
+            <FolderOpen size={15} style={{ color: accentColor }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[15px] font-bold text-foreground truncate">{projectName}</h2>
+            <div className="flex items-center gap-3 mt-0.5">
+              <span className="text-[10.5px] text-muted-foreground">
+                <span className="font-semibold text-foreground/70">{projItems.length}</span> tasks
+              </span>
+              <span className="text-[10.5px] text-muted-foreground">
+                <span className="font-semibold text-foreground/70">{projLogs.length}</span> log entries
+              </span>
+              {activeDays > 0 && (
+                <span className="text-[10.5px] text-muted-foreground">
+                  <span className="font-semibold text-foreground/70">{activeDays}</span> active days
+                </span>
+              )}
+              {totalMins > 0 && (
+                <span className="text-[10.5px] text-muted-foreground">
+                  <span className="font-semibold" style={{ color: accentColor }}>{formatMins(totalMins)}</span> logged
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/[0.06] text-muted-foreground transition-colors shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-white/[0.06] shrink-0">
+          {(["logs", "tasks"] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)}
+              className={`flex-1 py-2.5 text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                tab === t ? "text-foreground border-b-2" : "text-muted-foreground hover:text-foreground/70"
+              }`}
+              style={tab === t ? { borderBottomColor: accentColor } : {}}>
+              {t === "logs" ? `Work Log (${projLogs.length})` : `Tasks (${projItems.length})`}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto styled-scroll">
+          {/* ── Work Log Tab ── */}
+          {tab === "logs" && (
+            <div className="flex flex-col">
+              {/* Quick-add form */}
+              <div className="px-5 py-4 border-b border-white/[0.06] bg-[hsl(222_20%_8%)]">
+                <textarea value={logText} onChange={e => setLogText(e.target.value)}
+                  placeholder={`What did you work on for ${projectName} today?`}
+                  rows={2}
+                  onKeyDown={e => { if (e.key === "Enter" && e.metaKey) handleAddLog(); }}
+                  className="w-full bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded-lg px-3 py-2 text-[12.5px] text-foreground placeholder:text-muted-foreground/50 outline-none resize-none focus:border-blue-500/40 transition-colors mb-2" />
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <CalendarDays size={11} />
+                    <input type="date" value={logDate} onChange={e => setLogDate(e.target.value)}
+                      className="bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Timer size={11} />
+                    <input type="number" value={logDuration} onChange={e => setLogDuration(e.target.value)}
+                      placeholder="mins" min={1} max={999}
+                      className="w-16 bg-[hsl(222_18%_12%)] border border-white/[0.08] rounded px-2 py-1 text-[11px] text-foreground outline-none focus:border-blue-500/40 transition-colors" />
+                  </div>
+                  <button onClick={handleAddLog} disabled={!logText.trim() || submitting}
+                    className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    style={{ background: accentColor }}>
+                    <Plus size={11} /> Log Work
+                  </button>
+                </div>
+              </div>
+
+              {/* Timeline */}
+              {projLogs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-14 gap-2">
+                  <BookOpen size={22} className="text-muted-foreground/20" />
+                  <p className="text-[12px] text-muted-foreground/40">No work logged yet</p>
+                  <p className="text-[10.5px] text-muted-foreground/25">Log your first entry above</p>
+                </div>
+              ) : (
+                <div className="px-5 py-4 flex flex-col gap-4">
+                  {sortedDates.map(dateKey => {
+                    const dayLogs = logsByDate[dateKey];
+                    const dayTotal = dayLogs.reduce((s, l) => s + (l.duration_mins ?? 0), 0);
+                    const d = new Date(dateKey + "T00:00:00");
+                    const todayKey = new Date().toISOString().split("T")[0];
+                    const isToday = dateKey === todayKey;
+                    const label = isToday ? "Today" : d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
+                    return (
+                      <div key={dateKey}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: isToday ? accentColor : undefined }}>
+                            {label}
+                          </div>
+                          {dayTotal > 0 && (
+                            <div className="text-[9.5px] text-muted-foreground/50 ml-1">{formatMins(dayTotal)}</div>
+                          )}
+                          <div className="flex-1 border-t border-white/[0.05]" />
+                        </div>
+                        <div className="flex flex-col gap-1.5 ml-1">
+                          {dayLogs.map(log => (
+                            <div key={log.id} className="group flex items-start gap-2.5 rounded-lg px-3 py-2 bg-[hsl(222_18%_11%)] hover:bg-[hsl(222_18%_13%)] transition-colors">
+                              <div className="w-1 h-1 rounded-full mt-1.5 shrink-0" style={{ background: accentColor }} />
+                              <p className="flex-1 text-[12px] text-foreground/85 leading-relaxed">{log.description}</p>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {log.duration_mins && (
+                                  <span className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+                                    <Timer size={9} />{formatMins(log.duration_mins)}
+                                  </span>
+                                )}
+                                <button onClick={() => onDeleteLog(log.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-red-400/60 hover:text-red-400 transition-all">
+                                  <Trash2 size={10} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tasks Tab ── */}
+          {tab === "tasks" && (
+            <div className="px-5 py-4 flex flex-col gap-4">
+              {openItems.length > 0 && (
+                <div>
+                  <div className="text-[9.5px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-2">Open ({openItems.length})</div>
+                  <div className="flex flex-col gap-1.5">
+                    {openItems.map(item => (
+                      <button key={item.id} onClick={() => { onOpenItem(item); onClose(); }}
+                        className="flex items-center gap-2.5 text-left rounded-lg px-3 py-2.5 bg-[hsl(222_18%_11%)] hover:bg-[hsl(222_18%_13%)] transition-colors group">
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          item.priority === "Urgent" ? "bg-red-500" : item.priority === "High" ? "bg-amber-400" : "border border-blue-400/60"
+                        }`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12px] font-medium text-foreground truncate">{item.title}</div>
+                          {item.notes && <div className="text-[10.5px] text-muted-foreground/60 truncate mt-0.5">{item.notes}</div>}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <TypeBadge type={item.type} />
+                          {item.person && <span className="text-[10px] text-muted-foreground">{item.person}</span>}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {completedItems.length > 0 && (
+                <div>
+                  <div className="text-[9.5px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-2">Completed ({completedItems.length})</div>
+                  <div className="flex flex-col gap-1.5">
+                    {completedItems.map(item => (
+                      <button key={item.id} onClick={() => { onOpenItem(item); onClose(); }}
+                        className="flex items-center gap-2.5 text-left rounded-lg px-3 py-2.5 bg-[hsl(222_18%_10%)] hover:bg-[hsl(222_18%_12%)] transition-colors opacity-50 hover:opacity-75">
+                        <CheckCircle2 size={12} className="text-green-400 shrink-0" />
+                        <span className="flex-1 text-[12px] text-muted-foreground line-through truncate">{item.title}</span>
+                        <TypeBadge type={item.type} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {projItems.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-14 gap-2">
+                  <FileText size={22} className="text-muted-foreground/20" />
+                  <p className="text-[12px] text-muted-foreground/40">No tasks yet</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Command Input ────────────────────────────────────────────────────────────
 
 function CommandInput({ onSubmit, isLoading, matchBanner }: {
@@ -1210,12 +1501,14 @@ function CommandInput({ onSubmit, isLoading, matchBanner }: {
 type ViewMode = "board" | "week";
 
 export default function App() {
-  const [filter,      setFilter]      = useState("all");
-  const [viewMode,    setViewMode]    = useState<ViewMode>("board");
-  const [editingItem, setEditingItem] = useState<Request | null>(null);
-  const [toast, setToast]             = useState<{ msg: string; type?: "success" | "error" } | null>(null);
-  const [items, setItems]             = useState<Request[]>([]);
-  const [loading, setLoading]         = useState(false);
+  const [filter,       setFilter]       = useState("all");
+  const [viewMode,     setViewMode]     = useState<ViewMode>("board");
+  const [editingItem,  setEditingItem]  = useState<Request | null>(null);
+  const [toast, setToast]              = useState<{ msg: string; type?: "success" | "error" } | null>(null);
+  const [items, setItems]              = useState<Request[]>([]);
+  const [workLogs, setWorkLogs]        = useState<WorkLog[]>([]);
+  const [projectModal, setProjectModal] = useState<string | null>(null);
+  const [loading, setLoading]          = useState(false);
   const [pendingCreate, setPendingCreate] = useState<{
     parsed: Omit<Request, "id"|"created_at"|"updated_at"|"completed_at">;
     match:  { item: Request; score: number };
@@ -1232,13 +1525,23 @@ export default function App() {
     if (!error && data) setItems(data.map(rowToRequest));
   }, []);
 
+  const fetchWorkLogs = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("work_logs").select("*").order("log_date", { ascending: false });
+    if (!error && data) setWorkLogs(data.map(rowToWorkLog));
+  }, []);
+
   useEffect(() => {
     fetchItems();
+    fetchWorkLogs();
     const ch = supabase.channel("requests")
       .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, () => fetchItems())
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [fetchItems]);
+    const chLogs = supabase.channel("work_logs")
+      .on("postgres_changes", { event: "*", schema: "public", table: "work_logs" }, () => fetchWorkLogs())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); supabase.removeChannel(chLogs); };
+  }, [fetchItems, fetchWorkLogs]);
 
   const createRequest = useCallback(async (data: Omit<Request, "id"|"created_at"|"updated_at"|"completed_at">) => {
     setLoading(true);
@@ -1268,6 +1571,23 @@ export default function App() {
     showToast("Deleted");
     fetchItems();
   }, [fetchItems, showToast]);
+
+  const addWorkLog = useCallback(async (projectName: string, description: string, logDate: string, durationMins?: number) => {
+    const { error } = await supabase.from("work_logs").insert([{
+      project_name: projectName,
+      description,
+      log_date: logDate,
+      duration_mins: durationMins ?? null,
+    }]);
+    if (error) { showToast("Failed to log", "error"); return; }
+    showToast("Work logged");
+    fetchWorkLogs();
+  }, [fetchWorkLogs, showToast]);
+
+  const deleteWorkLog = useCallback(async (id: string) => {
+    await supabase.from("work_logs").delete().eq("id", id);
+    fetchWorkLogs();
+  }, [fetchWorkLogs]);
 
   const handleInput = useCallback((text: string) => {
     // Status commands
@@ -1377,7 +1697,7 @@ export default function App() {
         {/* Main content */}
         <div className="flex flex-col flex-1 overflow-hidden min-w-0">
           {viewMode === "week" ? (
-            <WeeklyReview items={items} onOpenItem={setEditingItem} />
+            <WeeklyReview items={items} workLogs={workLogs} onOpenItem={setEditingItem} onOpenProject={setProjectModal} />
           ) : (
             <>
               <div className="flex-1 overflow-x-auto overflow-y-hidden p-4 pb-0">
@@ -1385,7 +1705,8 @@ export default function App() {
                   {COLUMNS.map(col => (
                     <Column key={col.status} {...col}
                       items={filtered.filter(i => i.status === col.status)}
-                      onMove={handleMove} onDelete={handleDelete} onClick={setEditingItem} />
+                      onMove={handleMove} onDelete={handleDelete}
+                      onClick={item => item.project_name ? setProjectModal(item.project_name) : setEditingItem(item)} />
                   ))}
                 </div>
               </div>
@@ -1429,6 +1750,21 @@ export default function App() {
         {editingItem && (
           <EditModal item={editingItem} onClose={() => setEditingItem(null)}
             onSave={handleSave} onDelete={handleDelete} />
+        )}
+      </AnimatePresence>
+
+      {/* ── Project Modal ── */}
+      <AnimatePresence>
+        {projectModal && (
+          <ProjectModal
+            projectName={projectModal}
+            items={items}
+            workLogs={workLogs}
+            onClose={() => setProjectModal(null)}
+            onOpenItem={item => { setProjectModal(null); setEditingItem(item); }}
+            onAddLog={addWorkLog}
+            onDeleteLog={deleteWorkLog}
+          />
         )}
       </AnimatePresence>
 

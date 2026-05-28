@@ -1006,6 +1006,321 @@ function InsightsPanel({ items, onOpenItem }: { items: Request[]; onOpenItem: (i
   );
 }
 
+// ─── Type Focus Panel ───────────────────────────────────────────────────────
+
+type FocusType = "Review" | "Proposal" | "BD" | "Project" | "Task";
+
+const TYPE_FOCUS_CONFIG: Record<FocusType, {
+  color: string;
+  icon: React.ReactNode;
+  description: string;
+  emptyMsg: string;
+}> = {
+  Review:   { color: TYPE_COLORS.Review,   icon: <Search size={13} />,       description: "Technical & document reviews",  emptyMsg: "No reviews on record" },
+  Proposal: { color: TYPE_COLORS.Proposal, icon: <FileText size={13} />,     description: "Proposal & tender pipeline",     emptyMsg: "No proposals yet" },
+  BD:       { color: TYPE_COLORS.BD,       icon: <TrendingUp size={13} />,   description: "Business development activity",  emptyMsg: "No BD items yet" },
+  Project:  { color: TYPE_COLORS.Project,  icon: <Layers size={13} />,       description: "Active project work",            emptyMsg: "No projects on record" },
+  Task:     { color: TYPE_COLORS.Task,     icon: <CheckCircle2 size={13} />, description: "Standalone tasks",               emptyMsg: "No tasks on record" },
+};
+
+function generateTypeFocusInsights(type: FocusType, items: Request[]): string[] {
+  const all    = items.filter(i => i.type === type);
+  const active = all.filter(i => i.status !== "done");
+  const done   = all.filter(i => i.status === "done");
+  const overdue = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
+  const urgent  = active.filter(i => i.priority === "Urgent");
+  const inbox   = active.filter(i => i.status === "inbox");
+  const inProg  = active.filter(i => i.status === "in-progress");
+  const today   = new Date(); today.setHours(0, 0, 0, 0);
+  const todayKey = today.toISOString().split("T")[0];
+  const insights: string[] = [];
+
+  if (all.length === 0) return ["Nothing here yet — start logging to see insights."];
+
+  // Critical
+  if (overdue.length > 0) {
+    insights.push(`⚠ ${overdue.length} overdue ${type.toLowerCase()}${overdue.length > 1 ? "s" : ""} — ${overdue.slice(0,2).map(i => i.project_name || i.title).join(", ")}.`);
+  }
+  if (urgent.length > 0) {
+    insights.push(`🔴 ${urgent.length} urgent — ${urgent.slice(0,2).map(i => i.project_name || i.title).join(", ")}.`);
+  }
+
+  // Status summary
+  const compRate = all.length > 0 ? Math.round((done.length / all.length) * 100) : 0;
+  if (compRate >= 70 && done.length >= 3) {
+    insights.push(`✅ Strong completion — ${compRate}% done (${done.length} of ${all.length}).`);
+  } else if (compRate < 30 && all.length >= 3) {
+    insights.push(`📋 ${active.length} open, ${done.length} done — ${compRate}% complete.`);
+  } else if (all.length > 0) {
+    insights.push(`📋 ${active.length} active, ${done.length} done (${compRate}% completion rate).`);
+  }
+
+  // In-progress
+  if (inProg.length > 0) {
+    insights.push(`⚡ ${inProg.length} in progress — ${inProg.slice(0,2).map(i => i.project_name || i.title).join(", ")}${inProg.length > 2 ? " +more" : ""}.`);
+  }
+
+  // Inbox pile-up
+  if (inbox.length >= 3) {
+    insights.push(`📥 ${inbox.length} in Inbox — worth a quick triage.`);
+  }
+
+  // Added today
+  const addedToday = all.filter(x => effectiveDate(x) === todayKey);
+  if (addedToday.length > 0) insights.push(`📋 ${addedToday.length} logged today.`);
+
+  // Top project by count
+  const byProj: Record<string, number> = {};
+  active.forEach(i => { if (i.project_name) byProj[i.project_name] = (byProj[i.project_name] || 0) + 1; });
+  const topProj = Object.entries(byProj).sort((a, b) => b[1] - a[1])[0];
+  if (topProj && topProj[1] >= 2) {
+    insights.push(`📁 "${topProj[0]}" has ${topProj[1]} open ${type.toLowerCase()} items.`);
+  }
+
+  // Type-specific
+  if (type === "BD") {
+    const byPerson: Record<string, number> = {};
+    active.forEach(i => { if (i.person) byPerson[i.person] = (byPerson[i.person] || 0) + 1; });
+    const topPerson = Object.entries(byPerson).sort((a, b) => b[1] - a[1])[0];
+    if (topPerson) insights.push(`👤 Most BD contact: ${topPerson[0]} (${topPerson[1]} open).`);
+  }
+  if (type === "Proposal") {
+    const dueThis30 = active.filter(i => { const dl = deadlineInfo(i.deadline); return dl && (dl.diff ?? 99) <= 30 && (dl.diff ?? -1) >= 0; });
+    if (dueThis30.length > 0) insights.push(`📅 ${dueThis30.length} proposal${dueThis30.length > 1 ? "s" : ""} due within 30 days.`);
+  }
+
+  // All-clear
+  if (overdue.length === 0 && urgent.length === 0 && active.length > 0) {
+    insights.push("✨ No overdue, nothing urgent — all on track.");
+  }
+
+  return insights.slice(0, 5);
+}
+
+function TypeFocusPanel({
+  type, items, workLogs, onOpenItem,
+}: {
+  type: FocusType;
+  items: Request[];
+  workLogs: WorkLog[];
+  onOpenItem: (item: Request) => void;
+}) {
+  const cfg    = TYPE_FOCUS_CONFIG[type];
+  const all    = items.filter(i => i.type === type);
+  const active = all.filter(i => i.status !== "done");
+  const done   = all.filter(i => i.status === "done");
+  const overdue = active.filter(i => i.deadline && (deadlineInfo(i.deadline)?.diff ?? 0) < 0);
+  const urgent  = active.filter(i => i.priority === "Urgent");
+  const compRate = all.length > 0 ? Math.round((done.length / all.length) * 100) : 0;
+  const today   = new Date(); today.setHours(0, 0, 0, 0);
+
+  // 14-day sparkline scoped to this type
+  const days14 = useMemo(() => Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(today); d.setDate(d.getDate() - (13 - i));
+    const key = d.toISOString().split("T")[0];
+    return {
+      label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }),
+      added: all.filter(x => effectiveDate(x) === key).length,
+      done:  all.filter(x => x.completed_at?.startsWith(key)).length,
+    };
+  }), [all]);
+
+  // Top projects for this type
+  const byProject: Record<string, { total: number; active: number }> = {};
+  all.forEach(i => {
+    const k = i.project_name || i.title;
+    if (!byProject[k]) byProject[k] = { total: 0, active: 0 };
+    byProject[k].total++;
+    if (i.status !== "done") byProject[k].active++;
+  });
+  const topProjects = Object.entries(byProject).sort((a, b) => b[1].total - a[1].total).slice(0, 5);
+
+  // Assignee breakdown
+  const byAssignee: Record<string, number> = {};
+  all.forEach(i => { if (i.assignee) byAssignee[i.assignee] = (byAssignee[i.assignee] || 0) + 1; });
+  const assignees = Object.entries(byAssignee).sort((a, b) => b[1] - a[1]).slice(0, 4);
+
+  // Recent items (latest 6)
+  const recent = [...all].sort((a, b) => effectiveDate(b).localeCompare(effectiveDate(a))).slice(0, 6);
+
+  const insights = useMemo(() => generateTypeFocusInsights(type, items), [type, items]);
+
+  const accentBorder = cfg.color + "40";
+  const accentBg     = cfg.color + "08";
+
+  return (
+    <div className="flex flex-col gap-3 p-4 overflow-y-auto styled-scroll h-full">
+
+      {/* ── Header ── */}
+      <div className="rounded-lg border p-3" style={{ borderColor: accentBorder, background: accentBg }}>
+        <div className="flex items-center gap-2 mb-0.5" style={{ color: cfg.color }}>
+          {cfg.icon}
+          <span className="text-[12px] font-bold tracking-tight">{type}</span>
+        </div>
+        <p className="text-[10px] text-muted-foreground">{cfg.description}</p>
+      </div>
+
+      {/* ── Smart Insights ── */}
+      {insights.length > 0 && (
+        <div className="rounded-lg border border-white/[0.07] bg-[hsl(222_18%_12%)] p-3">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Lightbulb size={10} style={{ color: cfg.color }} />
+            <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: cfg.color }}>Insights</span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {insights.map((ins, i) => (
+              <p key={i} className="text-[10.5px] text-foreground/80 leading-snug">{ins}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── KPIs ── */}
+      <div className="grid grid-cols-2 gap-1.5">
+        {[
+          { label: "Total",   value: all.length,    color: cfg.color },
+          { label: "Active",  value: active.length, color: cfg.color },
+          { label: "Done",    value: done.length,   color: "hsl(142 70% 45%)" },
+          { label: "Overdue", value: overdue.length, color: overdue.length > 0 ? SENSE_RED : cfg.color },
+        ].map(kpi => (
+          <div key={kpi.label} className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-2.5">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-0.5">{kpi.label}</span>
+            <span className="text-2xl font-display font-bold tabular leading-none" style={{ color: kpi.color }}>{kpi.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Completion ring ── */}
+      <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3 flex items-center gap-3">
+        <div className="relative w-[52px] h-[52px] shrink-0">
+          <PieChart width={52} height={52}>
+            <Pie data={[{v:compRate},{v:100-compRate}]} dataKey="v" cx={22} cy={22} innerRadius={15} outerRadius={24} startAngle={90} endAngle={-270} strokeWidth={0}>
+              <Cell fill={cfg.color} />
+              <Cell fill="hsl(222 15% 18%)" />
+            </Pie>
+          </PieChart>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-[11px] font-bold tabular" style={{ color: cfg.color }}>{compRate}%</span>
+          </div>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-bold text-foreground">Completion</span>
+          <span className="text-[10px] text-muted-foreground">{done.length} of {all.length} done</span>
+          {urgent.length > 0 && (
+            <span className="text-[9.5px] text-red-400 flex items-center gap-1 mt-0.5">
+              <Zap size={9} />{urgent.length} urgent
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── 14-day sparkline ── */}
+      <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Activity · 14 days</span>
+        <div className="h-[46px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={days14} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+              <defs>
+                <linearGradient id={`gFocus-${type}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={cfg.color} stopOpacity={0.45} />
+                  <stop offset="95%" stopColor={cfg.color} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="label" hide />
+              <Tooltip contentStyle={{ background: "hsl(222 18% 14%)", border: "1px solid hsl(222 15% 22%)", borderRadius: 8, fontSize: 10, padding: "3px 8px" }}
+                labelStyle={{ color: "hsl(210 20% 80%)" }} itemStyle={{ color: "hsl(210 15% 65%)" }} />
+              <Area type="monotone" dataKey="added" stroke={cfg.color} strokeWidth={1.5} fill={`url(#gFocus-${type})`} name="Added" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* ── Top Projects ── */}
+      {topProjects.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Top Projects</span>
+          <div className="flex flex-col gap-2">
+            {topProjects.map(([name, counts]) => {
+              const max = topProjects[0][1].total;
+              return (
+                <div key={name}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[10.5px] text-foreground truncate flex-1 pr-2">{name}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {counts.active > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-sm font-medium" style={{ background: cfg.color + "20", color: cfg.color }}>{counts.active} open</span>}
+                      <span className="text-[10px] font-bold tabular text-muted-foreground">{counts.total}</span>
+                    </div>
+                  </div>
+                  <div className="h-[3px] rounded-full bg-white/[0.05] overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${(counts.total / max) * 100}%`, background: cfg.color + "80" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Assignees ── */}
+      {assignees.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Team</span>
+          <div className="flex flex-col gap-1.5">
+            {assignees.map(([name, count]) => {
+              const max = assignees[0][1];
+              return (
+                <div key={name} className="flex items-center gap-2">
+                  <Avatar name={name} size={16} />
+                  <span className="text-[10.5px] text-foreground flex-1 truncate">{name}</span>
+                  <div className="w-10 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${(count / max) * 100}%`, background: cfg.color + "99" }} />
+                  </div>
+                  <span className="text-[10px] font-bold tabular text-muted-foreground w-3 text-right">{count}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Recent Items ── */}
+      {recent.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-[hsl(222_18%_12%)] p-3">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">Recent</span>
+          <div className="flex flex-col gap-1">
+            {recent.map(item => {
+              const statusColor = item.status === "done" ? "hsl(142 70% 45%)" : item.status === "in-progress" ? AMBER : SLATE_DIM;
+              return (
+                <button key={item.id} onClick={() => onOpenItem(item)}
+                  className="flex items-start gap-2 text-left hover:bg-white/[0.03] rounded px-1 py-1 transition-colors w-full group">
+                  <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: statusColor }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10.5px] text-foreground leading-snug truncate group-hover:text-blue-300 transition-colors">{item.project_name || item.title}</p>
+                    {item.project_name && item.title !== item.project_name && (
+                      <p className="text-[9.5px] text-muted-foreground truncate">{item.title}</p>
+                    )}
+                  </div>
+                  <span className="text-[9px] text-muted-foreground/60 shrink-0 mt-0.5">{effectiveDate(item).slice(5)}</span>
+                </button>
+              );
+            })}
+          </div>
+          {all.length > 6 && (
+            <p className="text-[9.5px] text-muted-foreground/50 mt-2 text-center">+{all.length - 6} more</p>
+          )}
+        </div>
+      )}
+
+      {all.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <div className="opacity-30 mb-2" style={{ color: cfg.color }}>{cfg.icon}</div>
+          <p className="text-[11px] text-muted-foreground">{cfg.emptyMsg}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Weekly Review ────────────────────────────────────────────────────────────
 
 function WeeklyReview({ items, workLogs, onOpenItem, onOpenProject }: {
@@ -1885,13 +2200,37 @@ export default function App() {
           )}
         </div>
 
-        {/* ── Always-on Insights column ── */}
+        {/* ── Always-on Insights / Focus column ── */}
         <aside className="w-[272px] shrink-0 border-l border-white/[0.07] bg-[hsl(222_20%_8%)] flex flex-col overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06] shrink-0">
-            <BarChart3 size={12} className="text-blue-400" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Insights</span>
+            {filter !== "all" && filter in TYPE_FOCUS_CONFIG ? (
+              <>
+                <div style={{ color: TYPE_COLORS[filter] }} className="shrink-0">
+                  {TYPE_FOCUS_CONFIG[filter as FocusType].icon}
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: TYPE_COLORS[filter] }}>{filter}</span>
+                <button onClick={() => setFilter("all")}
+                  className="ml-auto text-[9px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded bg-white/[0.04] hover:bg-white/[0.08]">
+                  × All
+                </button>
+              </>
+            ) : (
+              <>
+                <BarChart3 size={12} className="text-blue-400" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Insights</span>
+              </>
+            )}
           </div>
-          <InsightsPanel items={items} onOpenItem={item => setEditingItem(item)} />
+          {filter !== "all" && filter in TYPE_FOCUS_CONFIG ? (
+            <TypeFocusPanel
+              type={filter as FocusType}
+              items={items}
+              workLogs={workLogs}
+              onOpenItem={item => setEditingItem(item)}
+            />
+          ) : (
+            <InsightsPanel items={items} onOpenItem={item => setEditingItem(item)} />
+          )}
         </aside>
       </div>
 

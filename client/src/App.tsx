@@ -2181,6 +2181,8 @@ export default function App() {
   const [workLogs, setWorkLogs]        = useState<WorkLog[]>([]);
   const [projectModal, setProjectModal] = useState<string | null>(null);
   const [loading, setLoading]          = useState(false);
+  const [insightWidth, setInsightWidth] = useState(272);
+  const insightDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
     parsed: Omit<Request, "id"|"created_at"|"updated_at"|"completed_at">;
     match:  { item: Request; score: number };
@@ -2354,6 +2356,25 @@ export default function App() {
     }
   }, []);
 
+  // ── Insight panel resize handlers ──
+  const onInsightMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    insightDragRef.current = { startX: e.clientX, startW: insightWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!insightDragRef.current) return;
+      const delta = insightDragRef.current.startX - ev.clientX;
+      const newW = Math.min(520, Math.max(200, insightDragRef.current.startW + delta));
+      setInsightWidth(newW);
+    };
+    const onUp = () => {
+      insightDragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [insightWidth]);
+
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
 
@@ -2476,7 +2497,15 @@ export default function App() {
         </div>
 
         {/* ── Always-on Insights / Focus column ── */}
-        <aside className="w-[272px] shrink-0 border-l border-white/[0.07] bg-[hsl(222_20%_8%)] flex flex-col overflow-hidden">
+        <aside style={{ width: insightWidth }} className="shrink-0 border-l border-white/[0.07] bg-[hsl(222_20%_8%)] flex flex-col overflow-hidden relative">
+          {/* Drag handle */}
+          <div
+            onMouseDown={onInsightMouseDown}
+            className="absolute left-0 top-0 h-full w-[5px] cursor-col-resize z-20 group"
+            style={{ marginLeft: -2 }}
+          >
+            <div className="w-[1px] h-full mx-auto bg-white/[0.07] group-hover:bg-blue-500/50 group-active:bg-blue-500/80 transition-colors" />
+          </div>
           <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06] shrink-0">
             {filter !== "all" && filter in TYPE_FOCUS_CONFIG ? (
               <>
